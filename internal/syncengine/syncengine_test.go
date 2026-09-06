@@ -692,11 +692,28 @@ func TestCheckFlagsMissingStub(t *testing.T) {
 	}
 }
 
-func TestCheckFlagsPrivateBlobInMirror(t *testing.T) {
+// The real content counts as leaked when it is reachable from a ref, i.e.
+// when a clone or push would carry it.
+func TestCheckFlagsPrivateBlobReachableInMirror(t *testing.T) {
 	p := setupStubbedPair(t)
 
-	// Simulate the real content reaching mirror's object database: identical
-	// content hashes to the identical object id.
+	// Commit the real content into mirror under an unrelated path: identical
+	// content hashes to the identical object id, so private's blob is now
+	// part of what this mirror would publish.
+	writeFile(t, p.mirror, "leaked-copy.yml", realConfig)
+	commitAll(t, p.mirror, "someone committed the real config")
+
+	findings := checkMirror(t, p)
+	if !hasFinding(findings, "stub-content-leak") {
+		t.Fatalf("expected a stub-content-leak finding, got %+v", findings)
+	}
+}
+
+// An unreachable leftover — the shape a rebuild leaves behind, kept alive by
+// the reflog — is not published, so it must not fail the check.
+func TestCheckIgnoresUnreachableLeftoverBlob(t *testing.T) {
+	p := setupStubbedPair(t)
+
 	cmd := exec.Command("git", "hash-object", "-w", "--stdin")
 	cmd.Dir = p.mirror
 	cmd.Stdin = strings.NewReader(realConfig)
@@ -705,8 +722,47 @@ func TestCheckFlagsPrivateBlobInMirror(t *testing.T) {
 	}
 
 	findings := checkMirror(t, p)
-	if !hasFinding(findings, "stub-content-leak") {
-		t.Fatalf("expected a stub-content-leak finding, got %+v", findings)
+	if hasFinding(findings, "stub-content-leak") {
+		t.Fatalf("an unreachable object is not part of the published history, got %+v", findings)
+	}
+}
+
+// Adding a stub rule to an already-synced pair must point at `pubmir rebuild`
+// rather than accusing anyone of editing the placeholder.
+func TestCheckOnNewlyStubbedFileAdvisesRebuild(t *testing.T) {
+	p := setupPair(t)
+	writeFile(t, p.private, "config/production.yml", realConfig)
+	commitAll(t, p.private, "add config")
+	if _, err := sync(t, p.private, false); err != nil {
+		t.Fatal(err)
+	}
+	setStubPatterns(t, p.private, []string{"config/production.yml"})
+
+	findings := checkMirror(t, p)
+	if !hasFinding(findings, "stub-modified") {
+		t.Fatalf("expected the not-a-placeholder finding, got %+v", findings)
+	}
+	// The real content still being there is the same story, so it must not
+	// be reported a second time.
+	if hasFinding(findings, "stub-content-leak") {
+		t.Fatalf("the cause is already reported once; got a duplicate symptom: %+v", findings)
+	}
+	var detail string
+	for _, f := range findings {
+		if f.Category == "stub-modified" {
+			detail = f.Detail
+		}
+	}
+	if !strings.Contains(detail, "pubmir rebuild") {
+		t.Fatalf("the finding should tell the user to rebuild, got %q", detail)
+	}
+
+	// And after the rebuild the mirror is clean.
+	if _, err := rebuild(t, p.private, true); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if findings := checkMirror(t, p); len(findings) != 0 {
+		t.Fatalf("check should pass after the rebuild, got %+v", findings)
 	}
 }
 

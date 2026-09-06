@@ -110,8 +110,21 @@ func Check(mirror, private *pairing.Side) ([]Finding, error) {
 	}
 	findings = append(findings, wtFindings...)
 
+	// Everything reachable from a ref — that is, everything a clone or push
+	// would carry. Objects outside this set (old blobs kept alive by the
+	// reflog after a rebuild, say) stay on this machine and are deliberately
+	// not treated as published.
+	reachableBlobs, err := mirror.Repo.RevListAllBlobs()
+	if err != nil {
+		return nil, err
+	}
+	reachable := make(map[string]bool, len(reachableBlobs))
+	for _, sha := range reachableBlobs {
+		reachable[sha] = true
+	}
+
 	// 2/3: full history content and path scan.
-	histFindings, err := scanHistory(mirror.Repo, mapper, current, explained)
+	histFindings, err := scanHistory(mirror.Repo, mapper, current, explained, reachableBlobs)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +153,7 @@ func Check(mirror, private *pairing.Side) ([]Finding, error) {
 
 	// 7: every stubbed path must still hold exactly the placeholder, and
 	// private's real blob for it must never have reached mirror's odb.
-	stubFindings, err := checkStubs(mirror, private)
+	stubFindings, err := checkStubs(mirror, private, reachable)
 	if err != nil {
 		return nil, err
 	}
@@ -151,10 +164,11 @@ func Check(mirror, private *pairing.Side) ([]Finding, error) {
 
 // checkStubs verifies that each file private stubs is present in mirror
 // holding exactly the generated placeholder, and that the private blob it
-// stands in for never entered mirror's object database. Identical content
+// stands in for is not reachable from any mirror ref. Identical content
 // hashes to an identical object id, so looking for private's own blob sha
-// in mirror is a precise test for "the real file was copied across".
-func checkStubs(mirror, private *pairing.Side) ([]Finding, error) {
+// among mirror's reachable blobs is a precise test for "the real file is
+// part of what this mirror would publish".
+func checkStubs(mirror, private *pairing.Side, reachable map[string]bool) ([]Finding, error) {
 	if len(private.Config.Stub) == 0 {
 		return nil, nil
 	}
@@ -173,17 +187,6 @@ func checkStubs(mirror, private *pairing.Side) ([]Finding, error) {
 			continue
 		}
 
-		present, err := mirror.Repo.HasObject(e.Sha)
-		if err != nil {
-			return nil, err
-		}
-		if present {
-			findings = append(findings, Finding{
-				Category: "stub-content-leak",
-				Detail:   fmt.Sprintf("%s: private's real blob for this stubbed file exists in mirror's object database", e.Path),
-			})
-		}
-
 		content, err := os.ReadFile(filepath.Join(mirror.Root, filepath.FromSlash(e.Path)))
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -195,10 +198,27 @@ func checkStubs(mirror, private *pairing.Side) ([]Finding, error) {
 			}
 			return nil, err
 		}
+
 		if !bytes.Equal(content, stub.Content) {
+			// Whether the rule simply postdates the last sync or someone
+			// edited the placeholder, the file is not a stub right now and
+			// the fix differs — so name both causes rather than guessing.
+			// The real content still being present is the same story, so it
+			// is not reported again separately.
 			findings = append(findings, Finding{
 				Category: "stub-modified",
-				Detail:   fmt.Sprintf("%s does not hold the expected stub placeholder in mirror", e.Path),
+				Detail: fmt.Sprintf("%s does not hold the stub placeholder in mirror; "+
+					"if the stub rule was added after the last sync, run `pubmir rebuild`, "+
+					"otherwise the placeholder was edited in the mirror and should be restored", e.Path),
+			})
+			continue
+		}
+
+		if reachable[e.Sha] {
+			findings = append(findings, Finding{
+				Category: "stub-content-leak",
+				Detail: fmt.Sprintf("%s: private's real content for this stubbed file is still reachable in mirror history; "+
+					"run `pubmir rebuild` to regenerate the history without it", e.Path),
 			})
 		}
 	}
@@ -249,7 +269,7 @@ func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[strin
 	return findings, nil
 }
 
-func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys map[string]bool) ([]Finding, error) {
+func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys map[string]bool, blobs []string) ([]Finding, error) {
 	var findings []Finding
 
 	bookkeepingBlobs, err := bookkeepingBlobShas(repo)
@@ -270,10 +290,6 @@ func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[st
 		}
 	}
 
-	blobs, err := repo.RevListAllBlobs()
-	if err != nil {
-		return nil, err
-	}
 	for _, sha := range blobs {
 		if bookkeepingBlobs[sha] {
 			continue

@@ -123,24 +123,6 @@ func (r *Repo) LookupPath(tree, path string) (entry TreeEntry, ok bool, err erro
 	return TreeEntry{Mode: meta[0], Type: meta[1], Sha: meta[2], Path: p}, true, nil
 }
 
-// HasObject reports whether sha exists in this repository's object
-// database, reachable or not. Because identical content always hashes to
-// the same object id, this answers "did that exact blob ever get written
-// here" without needing the content itself.
-func (r *Repo) HasObject(sha string) (bool, error) {
-	_, err := r.run(nil, "cat-file", "-e", sha+"^{object}")
-	if err == nil {
-		return true, nil
-	}
-	if ee, isExit := asExitError(err); isExit && ee.ExitCode() == 1 {
-		return false, nil
-	}
-	// `cat-file -e` also exits non-zero for a malformed/unknown id; treat
-	// anything that is not a clean "exists" as "not present" rather than
-	// failing the whole check.
-	return false, nil
-}
-
 // CatFileBlob reads a blob's raw content from this repo's object database.
 func (r *Repo) CatFileBlob(sha string) ([]byte, error) {
 	out, err := r.run(nil, "cat-file", "blob", sha)

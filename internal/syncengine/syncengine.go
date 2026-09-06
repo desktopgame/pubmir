@@ -270,7 +270,8 @@ func runPrivateToMirror(privateSide, mirrorSide *pairing.Side, branch string, pr
 		return nil, err
 	}
 
-	built, err := buildPrivateToMirror(privateSide.Repo, mirrorSide.Repo, pre.privateUnsyncedShas, excludePatterns, mapper, pre.branchState, carryForward)
+	built, err := buildPrivateToMirror(privateSide.Repo, mirrorSide.Repo, pre.privateUnsyncedShas, excludePatterns,
+		privateSide.Config.Stub, mapper, pre.branchState, carryForward)
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +355,15 @@ func runMirrorToPrivate(privateSide, mirrorSide *pairing.Side, branch string, pr
 		return nil, err
 	}
 
-	built, err := buildMirrorToPrivate(mirrorSide.Repo, privateSide.Repo, pre.mirrorUnsyncedShas, current, pre.branchState, carryForward)
+	// private's own real blobs for stubbed paths, so rebuilding private's
+	// tree from mirror's does not replace them with the placeholder.
+	privateStubs, err := stubEntries(privateSide.Repo, pre.privateHead, pre.privateHasHead, privateSide.Config.Stub)
+	if err != nil {
+		return nil, err
+	}
+
+	built, err := buildMirrorToPrivate(mirrorSide.Repo, privateSide.Repo, pre.mirrorUnsyncedShas, current, pre.branchState,
+		carryForward, privateSide.Config.Stub, privateStubs)
 	if err != nil {
 		return nil, err
 	}
@@ -383,6 +392,26 @@ func runMirrorToPrivate(privateSide, mirrorSide *pairing.Side, branch string, pr
 	}
 
 	return &Report{Direction: "mirror->private", Branch: branch, Applied: built}, nil
+}
+
+// stubEntries returns repo's own tree entries whose paths match the stub
+// patterns. On the private side these are the real files a stub stands in
+// for, which must survive a mirror->private sync untouched.
+func stubEntries(repo *gitrepo.Repo, head string, hasHead bool, stubPatterns []string) ([]gitrepo.TreeEntry, error) {
+	if !hasHead || len(stubPatterns) == 0 {
+		return nil, nil
+	}
+	entries, err := repo.LsTreeRecursive(head + "^{tree}")
+	if err != nil {
+		return nil, err
+	}
+	var matched []gitrepo.TreeEntry
+	for _, e := range entries {
+		if tokenize.MatchesAny(e.Path, stubPatterns) {
+			matched = append(matched, e)
+		}
+	}
+	return matched, nil
 }
 
 // carryForwardEntries reads target's own current HEAD tree (if it has one

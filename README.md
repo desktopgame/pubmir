@@ -166,9 +166,13 @@ Private:
 Mirror:
   up to date
 
+Stubbed files: 1
+
 Commit mapping:
   private abc1234 <-> mirror def5678
 ```
+
+`Stubbed files` は stub が設定されている場合のみ表示されます。
 
 ### `pubmir check`
 
@@ -181,6 +185,8 @@ mirror が外部へ出してよい状態かを検査します。どちら側か�
 * mirror 自身のもの以外に `.git` という名前のパスがないか
 * 未定義の `<PUBMIR:KEY>` トークンが残っていないか
 * 一般的なシークレットパターン（PEM ヘッダ、AWS アクセスキー等）
+* stub 対象ファイルが mirror に存在し、内容が placeholder のままか（欠落・改変を検出）
+* stub 対象ファイルの private 側の実 blob が、mirror の object database に存在しないか
 
 問題がなければ `OK: no leaks detected in mirror repository` を表示し、1 件でも見つかれば内容を列挙して終了コード 1 で終わります。
 
@@ -188,7 +194,7 @@ mirror が外部へ出してよい状態かを検査します。どちら側か�
 
 | ファイル | 場所 | Git 管理 | 内容 |
 | --- | --- | --- | --- |
-| `.pubmir.yml` | 両方 | **される** | `role`（private / mirror）と `exclude` パターン。可搬な設定のみ |
+| `.pubmir.yml` | 両方 | **される** | `role`（private / mirror）と `exclude` / `stub` パターン。可搬な設定のみ |
 | `.pubmir/local.yml` | 両方 | されない | `pair`（対になるリポジトリのパス）。クローン場所に依存するため分離 |
 | `.pubmir.env` | private のみ | されない | `KEY=VALUE` 形式の秘密値。KEY が `<PUBMIR:KEY>` になる |
 | `.pubmir/state.json` | 両方 | されない | commit mapping と、ブランチごとの最終同期 sha |
@@ -202,11 +208,57 @@ exclude:
   - "secrets/**"
   - "**/*.key"
   - "**/*.pem"
+stub:
+  - "config/production.yml"
 ```
 
 `.git`、`.pubmir/`、`.pubmir.env`、`.pubmir.secrets` は、ユーザー設定に関わらず常に強制除外されます。
 
-### 秘密値のローテーションについて
+## stub ファイル
+
+`exclude` はファイルの存在ごと mirror から消しますが、それでは AI が「そのファイルがある」ことすら分からなくなります。**stub** は、中身だけを隠してパスと存在は見せたい場合に使います。
+
+```yaml
+stub:
+  - "config/production.yml"
+  - "config/private/*.yml"
+```
+
+パターンの書式は `exclude` と同じです。mirror 側には同じパスでファイルが作られますが、中身は固定の placeholder に置き換わります。
+
+```text
+This file is intentionally stubbed by pubmir.
+Its private contents are not available in the sanitized mirror.
+```
+
+placeholder には、元ファイルの内容・サイズ・ハッシュ・行数など、private 由来の情報を一切含みません。**private の blob は読み込まれもしないため、mirror の object database に（到達不能オブジェクトとしてすら）書き込まれません。**
+
+パスが複数のルールに一致する場合の優先順位は次のとおりです。
+
+```text
+exclude > stub > tokenize
+```
+
+つまり `exclude` にも一致する場合はファイル自体が作られず、`stub` に一致する場合は placeholder に置き換わり、どちらでもなければ従来どおりトークン化されて搬送されます。
+
+### stub は書き戻せません
+
+stub は「匿名化された private ファイル」ではなく、**別個の安全な placeholder** です。そのため mirror → private の方向では、stub の内容が private へ書き戻されることは決してありません。
+
+* mirror 側で stub が変更されていなければ、private の実ファイルはそのまま維持されます
+* mirror 側で stub が**編集・削除・リネーム**された場合は、自動反映せず **sync を停止します**
+
+```text
+Error: stubbed file was modified in the mirror (commit 96bafcb...):
+
+  config/production.yml
+
+Stub files are not writable through pubmir. Refusing to apply this change to the private repository.
+```
+
+なお stub が隠すのは中身だけで、パスは mirror に公開されます。したがってパス文字列に秘密値が含まれる場合は、stub 対象であっても（従来どおり）sync を中断します。`config/203.0.113.42.yml` は「stub だから安全」とは扱いません。
+
+## 秘密値のローテーションについて
 
 `.pubmir.env` の値を変更すると、変更前の値を含む「まだ同期していない古いコミット」がトークン化されず漏洩する恐れがあります。これを防ぐため、pubmir は `.pubmir.env` を読み込むたびに現在値を `.pubmir/secrets-history.json` に追記し、**過去の値もすべて同じトークンへ変換します**。
 
@@ -243,6 +295,8 @@ skill の内容は、AI に対して次のことを伝えます。
 * **パスに秘密値** — ファイル名やディレクトリ名に秘密値が含まれる（パスは匿名化せず、代わりに停止します）
 * **未知のトークン** — mirror に、private 側で定義されていない `<PUBMIR:KEY>` がある
 * **秘密値ファイルが Git 管理下** — `.pubmir.env` がコミットされている
+* **stub の改変** — mirror 側で stub ファイルが編集・削除・リネームされている
+* **stub 可能でないエントリ** — symlink や submodule が stub パターンに一致している
 * **リポジトリ境界の異常** — private と mirror が同一ディレクトリ、入れ子、`.git` の共有、role の不一致、pair が相互を指していない
 
 また private → mirror の同期では、生成したコミットを**どの ref からも参照されない loose object として作り切ってから**、全ファイルの内容とコミットメッセージを漏洩検査し、**問題がなければ初めて mirror の ref を進めます**。検査に失敗した場合、mirror の ref と作業ツリーは一切変更されません。
@@ -256,6 +310,9 @@ MVP のため、以下は対応していません。
 * **パス自体は匿名化しません** — ファイル名に秘密値が含まれる場合は、変換ではなく停止します
 * **author / committer の名前とメールアドレスは変換されません** — 元のコミットの値がそのまま mirror に入ります
 * **sync は pair 設定済みのローカルクローンから実行する必要があります** — GitHub から取得した別クローンでは、private が参照できないため sync できません（通常の `git pull` で手元の mirror に取り込んでから sync してください）
+* **stub の内容はカスタマイズできません** — placeholder は固定文面で、拡張子に応じたコメント記法や独自テンプレートには対応していません
+* **stub は書き込み不可です** — mirror 側の stub を通して private の設定を変更することはできません（stub を編集すると sync が停止します）
+* **stub 可能なのは通常ファイルのみです** — symlink や submodule を stub 対象にするとエラーになります
 
 秘密鍵・アクセストークン・パスワードは、そもそも Git 管理しないことを前提としています。
 

@@ -8,10 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/desktopgame/pubmir/internal/cli"
+	"github.com/desktopgame/pubmir/internal/config"
 	"github.com/desktopgame/pubmir/internal/leakcheck"
 	"github.com/desktopgame/pubmir/internal/pairing"
 	"github.com/desktopgame/pubmir/internal/secrets"
+	"github.com/desktopgame/pubmir/internal/stub"
 	"github.com/desktopgame/pubmir/internal/syncengine"
 )
 
@@ -141,9 +145,50 @@ func setSecrets(t *testing.T, privateDir string, kv map[string]string) {
 	}
 }
 
+// setStubPatterns rewrites private's tracked .pubmir.yml and commits it, so
+// the working tree stays clean for the sync that follows.
+func setStubPatterns(t *testing.T, privateDir string, patterns []string) {
+	t.Helper()
+	cfg, err := config.Load(privateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Stub = patterns
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(privateDir, ".pubmir.yml"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, privateDir, "configure stub patterns")
+}
+
 func sync(t *testing.T, dir string, yes bool) (*syncengine.Report, error) {
 	t.Helper()
 	return syncengine.Run(dir, syncengine.Options{Yes: yes})
+}
+
+func checkMirror(t *testing.T, p pair) []leakcheck.Finding {
+	t.Helper()
+	side, err := pairing.Resolve(p.mirror)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, err := leakcheck.Check(side.Self, side.Other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return findings
+}
+
+func hasFinding(findings []leakcheck.Finding, category string) bool {
+	for _, f := range findings {
+		if f.Category == category {
+			return true
+		}
+	}
+	return false
 }
 
 func headSha(t *testing.T, dir string) string {
@@ -377,6 +422,206 @@ func TestSecretsFileInSubdirectoryNotSynced(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(p.mirror, "docs/notes.txt")); err != nil {
 		t.Fatalf("ordinary content should still sync: %v", err)
+	}
+}
+
+// --- stub files ---------------------------------------------------------
+
+const realConfig = "database_password: hunter2\napi_endpoint: 203.0.113.42\n"
+
+// setupStubbedPair returns a pair where config/production.yml is stubbed and
+// already synced once.
+func setupStubbedPair(t *testing.T) pair {
+	t.Helper()
+	p := setupPair(t)
+	setSecrets(t, p.private, map[string]string{"IP": "203.0.113.42"})
+	setStubPatterns(t, p.private, []string{"config/production.yml"})
+	writeFile(t, p.private, "config/production.yml", realConfig)
+	writeFile(t, p.private, "docs/notes.txt", "ordinary content\n")
+	commitAll(t, p.private, "add config and docs")
+	if _, err := sync(t, p.private, false); err != nil {
+		t.Fatalf("private->mirror sync: %v", err)
+	}
+	return p
+}
+
+func TestStubReplacesContentInMirror(t *testing.T) {
+	p := setupStubbedPair(t)
+
+	got, err := os.ReadFile(filepath.Join(p.mirror, "config/production.yml"))
+	if err != nil {
+		t.Fatalf("stub file must exist in mirror at the same path: %v", err)
+	}
+	if string(got) != string(stub.Content) {
+		t.Fatalf("mirror stub content = %q, want the generated placeholder", got)
+	}
+	if strings.Contains(string(got), "hunter2") {
+		t.Fatal("private content leaked into the stub")
+	}
+
+	// Ordinary files are unaffected by stubbing.
+	notes, err := os.ReadFile(filepath.Join(p.mirror, "docs/notes.txt"))
+	if err != nil || string(notes) != "ordinary content\n" {
+		t.Fatalf("non-stub file = %q, err=%v", notes, err)
+	}
+
+	// private's real blob must never have been written into mirror's odb,
+	// not even as an unreferenced object.
+	privateBlob := strings.TrimSpace(runGit(t, p.private, "rev-parse", "HEAD:config/production.yml"))
+	cmd := exec.Command("git", "cat-file", "-e", privateBlob+"^{object}")
+	cmd.Dir = p.mirror
+	if err := cmd.Run(); err == nil {
+		t.Fatalf("private blob %s exists in mirror's object database", privateBlob)
+	}
+}
+
+func TestExcludeTakesPrecedenceOverStub(t *testing.T) {
+	p := setupPair(t)
+	// secrets/** is excluded by default; also list it as a stub pattern.
+	setStubPatterns(t, p.private, []string{"secrets/**"})
+	writeFile(t, p.private, "secrets/prod.yml", realConfig)
+	runGit(t, p.private, "add", "-f", "secrets/prod.yml")
+	runGit(t, p.private, "commit", "-q", "-m", "add excluded-and-stubbed file")
+
+	if _, err := sync(t, p.private, false); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(p.mirror, "secrets/prod.yml")); !os.IsNotExist(err) {
+		t.Fatalf("exclude must win over stub, so no file at all should exist in mirror (err=%v)", err)
+	}
+}
+
+func TestStubPathWithSecretValueAborts(t *testing.T) {
+	p := setupPair(t)
+	setSecrets(t, p.private, map[string]string{"IP": "203.0.113.42"})
+	setStubPatterns(t, p.private, []string{"config/*.yml"})
+	writeFile(t, p.private, "config/203.0.113.42.yml", realConfig)
+	commitAll(t, p.private, "stubbed file whose path leaks a secret")
+
+	if _, err := sync(t, p.private, false); err == nil {
+		t.Fatal("a secret value in the path must abort the sync even when the file is stubbed")
+	}
+}
+
+func TestUntouchedStubDoesNotOverwritePrivateFile(t *testing.T) {
+	p := setupStubbedPair(t)
+
+	// The AI edits something else entirely and leaves the stub alone.
+	writeFile(t, p.mirror, "docs/notes.txt", "edited by the AI\n")
+	commitAll(t, p.mirror, "AI: update notes")
+
+	if _, err := sync(t, p.mirror, true); err != nil {
+		t.Fatalf("mirror->private sync: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(p.private, "config/production.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != realConfig {
+		t.Fatalf("private's real file was overwritten: got %q, want %q", got, realConfig)
+	}
+	notes, err := os.ReadFile(filepath.Join(p.private, "docs/notes.txt"))
+	if err != nil || string(notes) != "edited by the AI\n" {
+		t.Fatalf("the AI's real edit should still land: %q, err=%v", notes, err)
+	}
+}
+
+func TestModifiedStubRejected(t *testing.T) {
+	p := setupStubbedPair(t)
+	privateBefore := headSha(t, p.private)
+
+	writeFile(t, p.mirror, "config/production.yml", "port: 8080\n")
+	commitAll(t, p.mirror, "AI: edit the stub")
+
+	_, err := sync(t, p.mirror, true)
+	if err == nil {
+		t.Fatal("editing a stub in mirror must be refused")
+	}
+	if !strings.Contains(err.Error(), "modified") {
+		t.Fatalf("expected a 'modified' stub error, got: %v", err)
+	}
+	if after := headSha(t, p.private); after != privateBefore {
+		t.Fatalf("private changed despite the refusal: %s -> %s", privateBefore, after)
+	}
+	if got, _ := os.ReadFile(filepath.Join(p.private, "config/production.yml")); string(got) != realConfig {
+		t.Fatalf("private's real file must be untouched, got %q", got)
+	}
+}
+
+func TestDeletedStubRejected(t *testing.T) {
+	p := setupStubbedPair(t)
+
+	runGit(t, p.mirror, "rm", "-q", "config/production.yml")
+	runGit(t, p.mirror, "commit", "-q", "-m", "AI: delete the stub")
+
+	_, err := sync(t, p.mirror, true)
+	if err == nil {
+		t.Fatal("deleting a stub in mirror must be refused")
+	}
+	if !strings.Contains(err.Error(), "removed or renamed") {
+		t.Fatalf("expected a removal error, got: %v", err)
+	}
+}
+
+func TestRenamedStubRejected(t *testing.T) {
+	p := setupStubbedPair(t)
+
+	runGit(t, p.mirror, "mv", "config/production.yml", "config/renamed.yml")
+	runGit(t, p.mirror, "commit", "-q", "-m", "AI: rename the stub")
+
+	if _, err := sync(t, p.mirror, true); err == nil {
+		t.Fatal("renaming a stub in mirror must be refused")
+	}
+	if got, _ := os.ReadFile(filepath.Join(p.private, "config/production.yml")); string(got) != realConfig {
+		t.Fatalf("private's real file must be untouched, got %q", got)
+	}
+}
+
+func TestCheckAcceptsHealthyStub(t *testing.T) {
+	p := setupStubbedPair(t)
+	if findings := checkMirror(t, p); len(findings) != 0 {
+		t.Fatalf("expected no findings for a healthy stub, got %+v", findings)
+	}
+}
+
+func TestCheckFlagsModifiedStub(t *testing.T) {
+	p := setupStubbedPair(t)
+	writeFile(t, p.mirror, "config/production.yml", "someone rewrote this\n")
+
+	findings := checkMirror(t, p)
+	if !hasFinding(findings, "stub-modified") {
+		t.Fatalf("expected a stub-modified finding, got %+v", findings)
+	}
+}
+
+func TestCheckFlagsMissingStub(t *testing.T) {
+	p := setupStubbedPair(t)
+	if err := os.Remove(filepath.Join(p.mirror, "config/production.yml")); err != nil {
+		t.Fatal(err)
+	}
+
+	findings := checkMirror(t, p)
+	if !hasFinding(findings, "stub-missing") {
+		t.Fatalf("expected a stub-missing finding, got %+v", findings)
+	}
+}
+
+func TestCheckFlagsPrivateBlobInMirror(t *testing.T) {
+	p := setupStubbedPair(t)
+
+	// Simulate the real content reaching mirror's object database: identical
+	// content hashes to the identical object id.
+	cmd := exec.Command("git", "hash-object", "-w", "--stdin")
+	cmd.Dir = p.mirror
+	cmd.Stdin = strings.NewReader(realConfig)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("seeding mirror odb: %v\n%s", err, out)
+	}
+
+	findings := checkMirror(t, p)
+	if !hasFinding(findings, "stub-content-leak") {
+		t.Fatalf("expected a stub-content-leak finding, got %+v", findings)
 	}
 }
 

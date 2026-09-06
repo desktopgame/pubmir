@@ -47,7 +47,7 @@ func RunInit(args []string) error {
 	}
 
 	roleVal := config.Role(*role)
-	cfg := &config.Config{Role: roleVal, Exclude: config.DefaultExclude()}
+	cfg := &config.Config{Role: roleVal, Exclude: config.DefaultExclude(), Stub: []string{}}
 	if err := cfg.Save(repo.Root); err != nil {
 		return err
 	}

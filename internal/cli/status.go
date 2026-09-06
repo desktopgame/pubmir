@@ -8,6 +8,7 @@ import (
 	"github.com/desktopgame/pubmir/internal/gitrepo"
 	"github.com/desktopgame/pubmir/internal/pairing"
 	"github.com/desktopgame/pubmir/internal/state"
+	"github.com/desktopgame/pubmir/internal/tokenize"
 )
 
 func RunStatus(args []string) error {
@@ -58,6 +59,12 @@ func RunStatus(args []string) error {
 	fmt.Println("\nMirror:")
 	printSyncLine(mirrorCount, "not applied to private")
 
+	if stubbed, err := stubbedFileCount(privateSide); err != nil {
+		return err
+	} else if stubbed > 0 {
+		fmt.Printf("\nStubbed files: %d\n", stubbed)
+	}
+
 	if len(bs.Mapping) > 0 {
 		fmt.Println("\nCommit mapping:")
 		for _, m := range bs.Mapping {
@@ -65,6 +72,29 @@ func RunStatus(args []string) error {
 		}
 	}
 	return nil
+}
+
+// stubbedFileCount counts the files in private's current tree whose content
+// is replaced by a placeholder in mirror.
+func stubbedFileCount(privateSide *pairing.Side) (int, error) {
+	if len(privateSide.Config.Stub) == 0 {
+		return 0, nil
+	}
+	head, hasHead, err := privateSide.Repo.RevParseVerify("HEAD")
+	if err != nil || !hasHead {
+		return 0, err
+	}
+	entries, err := privateSide.Repo.LsTreeRecursive(head + "^{tree}")
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, e := range entries {
+		if tokenize.MatchesAny(e.Path, privateSide.Config.Stub) {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func printSyncLine(count int, suffix string) {

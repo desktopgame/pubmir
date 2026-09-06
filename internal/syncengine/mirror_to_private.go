@@ -1,12 +1,14 @@
 package syncengine
 
 import (
+	"bytes"
 	"fmt"
 	"slices"
 
 	"github.com/desktopgame/pubmir/internal/config"
 	"github.com/desktopgame/pubmir/internal/gitrepo"
 	"github.com/desktopgame/pubmir/internal/state"
+	"github.com/desktopgame/pubmir/internal/stub"
 	"github.com/desktopgame/pubmir/internal/tokenize"
 )
 
@@ -21,6 +23,8 @@ func buildMirrorToPrivate(
 	currentSecrets map[string]string,
 	bs *state.BranchState,
 	carryForward []gitrepo.TreeEntry,
+	stubPatterns []string,
+	privateStubs []gitrepo.TreeEntry,
 ) ([]BuiltCommit, error) {
 	parentOf := map[string]string{} // mirror sha -> private sha
 	for _, m := range bs.Mapping {
@@ -39,8 +43,18 @@ func buildMirrorToPrivate(
 			return nil, err
 		}
 
+		if err := verifyStubsUntouched(mirror, sha, entries, privateStubs); err != nil {
+			return nil, err
+		}
+
 		var privateEntries []gitrepo.TreeEntry
 		for _, e := range entries {
+			// A stub is a placeholder artifact, not an editable view of the
+			// private file: its content must never travel back. private's
+			// own real blob is re-inserted via privateStubs below.
+			if tokenize.MatchesAny(e.Path, stubPatterns) {
+				continue
+			}
 			// mirror's own .pubmir.yml/.gitignore/skill file must never
 			// overwrite private's; carryForward re-inserts private's own
 			// copies below (nothing to carry forward for the skill file,
@@ -67,6 +81,8 @@ func buildMirrorToPrivate(
 				Mode: e.Mode, Type: e.Type, Sha: newBlobSha, Path: e.Path,
 			})
 		}
+
+		privateEntries = append(privateEntries, privateStubs...)
 
 		privateTree, err := buildNestedTree(private, append(privateEntries, carryForward...))
 		if err != nil {
@@ -97,4 +113,39 @@ func buildMirrorToPrivate(
 		built = append(built, BuiltCommit{SourceSha: sha, TargetSha: privateSha, Message: firstLine(restoredMessage)})
 	}
 	return built, nil
+}
+
+// verifyStubsUntouched refuses the sync if a stub file was edited, removed
+// or renamed in mirror. Stubs are one-way protected content: pubmir has no
+// way to translate an edited placeholder back into a real private file, so
+// the only safe response is to stop and let a human decide.
+func verifyStubsUntouched(mirror *gitrepo.Repo, mirrorCommit string, mirrorEntries, privateStubs []gitrepo.TreeEntry) error {
+	byPath := make(map[string]gitrepo.TreeEntry, len(mirrorEntries))
+	for _, e := range mirrorEntries {
+		byPath[e.Path] = e
+	}
+
+	for _, ps := range privateStubs {
+		e, ok := byPath[ps.Path]
+		if !ok {
+			return fmt.Errorf("stubbed file was removed or renamed in the mirror (commit %s):\n\n  %s\n\n"+
+				"Stub files are not writable through pubmir. Refusing to apply this change to the private repository.",
+				mirrorCommit, ps.Path)
+		}
+		if !stub.IsRegularFileMode(e.Mode) {
+			return fmt.Errorf("stubbed file was replaced by a non-regular entry in the mirror (commit %s):\n\n  %s\n\n"+
+				"Stub files are not writable through pubmir. Refusing to apply this change to the private repository.",
+				mirrorCommit, ps.Path)
+		}
+		content, err := mirror.CatFileBlob(e.Sha)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(content, stub.Content) {
+			return fmt.Errorf("stubbed file was modified in the mirror (commit %s):\n\n  %s\n\n"+
+				"Stub files are not writable through pubmir. Refusing to apply this change to the private repository.",
+				mirrorCommit, ps.Path)
+		}
+	}
+	return nil
 }

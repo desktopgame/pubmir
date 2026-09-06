@@ -65,6 +65,10 @@ var BookkeepingPaths = []string{FileName, GitignoreFileName, skillasset.PubmirMi
 type Config struct {
 	Role    Role     `yaml:"role"`
 	Exclude []string `yaml:"exclude"`
+	// Stub paths keep their name and location in mirror but never their
+	// content: mirror gets a fixed placeholder instead. Absent in older
+	// config files, where it simply means "no stubs".
+	Stub []string `yaml:"stub"`
 }
 
 type Local struct {

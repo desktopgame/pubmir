@@ -82,6 +82,32 @@ When editing such content, preserve the tokens unless the task specifically requ
 
 ---
 
+## Stub files
+
+Some files exist in the mirror only as placeholders. Their entire content is:
+
+```text
+This file is intentionally stubbed by pubmir.
+Its private contents are not available in the sanitized mirror.
+```
+
+This means the path and the file's existence are shared with you deliberately, but its real contents never cross the pubmir boundary.
+
+A stub is not an empty file waiting to be filled in, and not a file whose content was lost. Treat it as read-only.
+
+Do not:
+
+* write real or plausible configuration into a stub file
+* reconstruct what its contents "should" be
+* delete or rename a stub file
+* treat a stub as a task to complete
+
+pubmir refuses to sync a stub that was edited, deleted or renamed in the mirror, so any such change is wasted work and will block the human's next sync until it is undone.
+
+If a task appears to require the real contents of a stubbed file, stop and explain to the human what is missing. They can make the change on the private side themselves.
+
+---
+
 ## Commands the AI may run
 
 The AI may run read-only pubmir commands when they help understand or validate the repository.

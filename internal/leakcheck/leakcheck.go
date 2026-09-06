@@ -4,6 +4,7 @@
 package leakcheck
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/desktopgame/pubmir/internal/gitrepo"
 	"github.com/desktopgame/pubmir/internal/pairing"
 	"github.com/desktopgame/pubmir/internal/secrets"
+	"github.com/desktopgame/pubmir/internal/stub"
 	"github.com/desktopgame/pubmir/internal/tokenize"
 )
 
@@ -111,6 +113,70 @@ func Check(mirror, private *pairing.Side) ([]Finding, error) {
 	}
 	findings = append(findings, gitFindings...)
 
+	// 7: every stubbed path must still hold exactly the placeholder, and
+	// private's real blob for it must never have reached mirror's odb.
+	stubFindings, err := checkStubs(mirror, private)
+	if err != nil {
+		return nil, err
+	}
+	findings = append(findings, stubFindings...)
+
+	return findings, nil
+}
+
+// checkStubs verifies that each file private stubs is present in mirror
+// holding exactly the generated placeholder, and that the private blob it
+// stands in for never entered mirror's object database. Identical content
+// hashes to an identical object id, so looking for private's own blob sha
+// in mirror is a precise test for "the real file was copied across".
+func checkStubs(mirror, private *pairing.Side) ([]Finding, error) {
+	if len(private.Config.Stub) == 0 {
+		return nil, nil
+	}
+	privateHead, hasHead, err := private.Repo.RevParseVerify("HEAD")
+	if err != nil || !hasHead {
+		return nil, err
+	}
+	privateEntries, err := private.Repo.LsTreeRecursive(privateHead + "^{tree}")
+	if err != nil {
+		return nil, err
+	}
+
+	var findings []Finding
+	for _, e := range privateEntries {
+		if !tokenize.MatchesAny(e.Path, private.Config.Stub) {
+			continue
+		}
+
+		present, err := mirror.Repo.HasObject(e.Sha)
+		if err != nil {
+			return nil, err
+		}
+		if present {
+			findings = append(findings, Finding{
+				Category: "stub-content-leak",
+				Detail:   fmt.Sprintf("%s: private's real blob for this stubbed file exists in mirror's object database", e.Path),
+			})
+		}
+
+		content, err := os.ReadFile(filepath.Join(mirror.Root, filepath.FromSlash(e.Path)))
+		if err != nil {
+			if os.IsNotExist(err) {
+				findings = append(findings, Finding{
+					Category: "stub-missing",
+					Detail:   fmt.Sprintf("%s is stubbed in private but missing from mirror", e.Path),
+				})
+				continue
+			}
+			return nil, err
+		}
+		if !bytes.Equal(content, stub.Content) {
+			findings = append(findings, Finding{
+				Category: "stub-modified",
+				Detail:   fmt.Sprintf("%s does not hold the expected stub placeholder in mirror", e.Path),
+			})
+		}
+	}
 	return findings, nil
 }
 

@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(.env)",
+      "Read(.env.*)",
+      "Edit(/.claude/settings.json)",
+      "Edit(/.claude/settings.local.json)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(git pull *)",
+      "Bash(uv run *)",
+
+      "WebFetch"
+    ],
+    "allow": [
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log -n *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  },
+  "env": {
+    "EDITOR": "code --wait",
+    "VISUAL": "code --wait"
+  }
+}

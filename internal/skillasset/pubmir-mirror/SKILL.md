@@ -157,13 +157,16 @@ Do not run:
 
 ```bash
 pubmir sync
+pubmir rebuild
 ```
 
 on your own.
 
 `pubmir sync` crosses the security boundary between the private and mirror repositories.
 
-This operation is intentionally human-controlled.
+`pubmir rebuild` regenerates the entire mirror history from the private repository, changing commit SHAs and discarding anything in the mirror that has not been synchronized back. It can only be run from the private side, which you do not have access to.
+
+Both operations are intentionally human-controlled.
 
 If synchronization is needed, tell the human that `pubmir sync` should be run from the appropriate repository.
 

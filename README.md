@@ -190,6 +190,61 @@ mirror が外部へ出してよい状態かを検査します。どちら側か�
 
 問題がなければ `OK: no leaks detected in mirror repository` を表示し、1 件でも見つかれば内容を列挙して終了コード 1 で終わります。
 
+`blob <sha>:` が付いた指摘は**過去のコミットに埋まっている**ものです。作業ツリーを直しても消えないため、その場合は `pubmir rebuild` が必要になります（その旨も出力されます）。
+
+### `pubmir rebuild [--yes]`
+
+**private 側でのみ**実行できます。private の履歴を source of truth として、**現在のルールで mirror の履歴全体を最初から作り直します**。
+
+`sync` は新しいコミットしか搬送しないため、匿名化のルール（`.pubmir.env` / `exclude` / `stub`）を後から追加しても、過去の mirror コミットに残った情報は消えません。それを消すためのコマンドです。
+
+典型的な復旧手順:
+
+```text
+pubmir check            # 過去の履歴に漏洩を検出
+    ↓
+.pubmir.env / exclude / stub を更新
+    ↓
+pubmir rebuild          # 現在のルールで履歴を再生成
+    ↓
+pubmir check            # 解消を確認
+    ↓
+git push --force-with-lease   # 必要なら手動で
+```
+
+破壊的操作なので、既定で確認を求めます（`--yes` で省略可能ですが、安全性検査は省略されません）。
+
+```text
+WARNING: pubmir will rebuild the entire mirror history.
+
+Private:
+  /home/user/work/VPS
+
+Mirror:
+  /home/user/work/VPS-mirror
+
+Branch:
+  main
+
+All mirror commit SHAs on this branch will change.
+
+If this mirror has already been pushed to a remote repository,
+a force push will be required afterward.
+
+Proceed? [y/N]
+```
+
+次の場合は実行を拒否します。
+
+* mirror 側に private へ未反映のコミットがある（それを捨ててしまうため）
+* private / mirror のいずれかの作業ツリーが汚れている
+* private の履歴にマージコミットがある
+* mirror 側から実行された
+
+pubmir が自動で push することはありません。remote が設定されている場合、完了後に `git push --force-with-lease` の案内を表示するだけです。
+
+なお、オブジェクトの生成は決定論的なので、**ルールを変えずに rebuild しても結果は同じ**になります（何度実行しても安全です）。SHA が変わるのは、実際に内容が変わったコミット以降だけです。
+
 ## 設定ファイル
 
 | ファイル | 場所 | Git 管理 | 内容 |
@@ -313,6 +368,8 @@ MVP のため、以下は対応していません。
 * **stub の内容はカスタマイズできません** — placeholder は固定文面で、拡張子に応じたコメント記法や独自テンプレートには対応していません
 * **stub は書き込み不可です** — mirror 側の stub を通して private の設定を変更することはできません（stub を編集すると sync が停止します）
 * **stub 可能なのは通常ファイルのみです** — symlink や submodule を stub 対象にするとエラーになります
+
+* **`pubmir rebuild` は漏洩を取り消せません** — 現在の mirror 履歴からは消えますが、既に push / clone / fork / CI ログ等へ渡った複製までは消せません。認証情報が漏れた場合はローテーション・失効が本筋です
 
 秘密鍵・アクセストークン・パスワードは、そもそも Git 管理しないことを前提としています。
 

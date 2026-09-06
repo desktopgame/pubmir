@@ -26,6 +26,8 @@ func main() {
 		err = cli.RunStatus(os.Args[2:])
 	case "check":
 		err = cli.RunCheck(os.Args[2:])
+	case "rebuild":
+		err = cli.RunRebuild(os.Args[2:])
 	case "-h", "--help", "help":
 		printUsage()
 		return
@@ -48,5 +50,6 @@ Usage:
   pubmir init --role <private|mirror> --pair <path>
   pubmir sync [--yes]
   pubmir status
-  pubmir check`)
+  pubmir check
+  pubmir rebuild [--yes]   (private side only; regenerates the whole mirror history)`)
 }

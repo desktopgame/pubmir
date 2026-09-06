@@ -237,6 +237,16 @@ func (r *Repo) AllTrackedPathsAllCommits() ([]string, error) {
 	return paths, nil
 }
 
+// HasRemote reports whether any remote is configured. Only the fact is
+// returned, never the URL, which may itself be sensitive.
+func (r *Repo) HasRemote() (bool, error) {
+	out, err := r.run(nil, "remote")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
 // ShortSha abbreviates an object id for display.
 func ShortSha(sha string) string {
 	if len(sha) > 7 {

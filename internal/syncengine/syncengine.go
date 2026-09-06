@@ -6,6 +6,7 @@ package syncengine
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/desktopgame/pubmir/internal/pairing"
 	"github.com/desktopgame/pubmir/internal/secrets"
 	"github.com/desktopgame/pubmir/internal/state"
+	"github.com/desktopgame/pubmir/internal/stub"
 	"github.com/desktopgame/pubmir/internal/tokenize"
 )
 
@@ -276,7 +278,12 @@ func runPrivateToMirror(privateSide, mirrorSide *pairing.Side, branch string, pr
 		return nil, err
 	}
 
-	if err := gateBuiltCommits(mirrorSide.Repo, built, mapper, current); err != nil {
+	if err := gateBuiltCommits(mirrorSide.Repo, built, gatePolicy{
+		mapper:          mapper,
+		currentSecrets:  current,
+		excludePatterns: excludePatterns,
+		stubPatterns:    privateSide.Config.Stub,
+	}); err != nil {
 		return nil, err
 	}
 
@@ -294,15 +301,24 @@ func runPrivateToMirror(privateSide, mirrorSide *pairing.Side, branch string, pr
 	return &Report{Direction: "private->mirror", Branch: branch, Applied: built}, nil
 }
 
+// gatePolicy is the set of current rules the built commits are verified
+// against before any mirror ref is allowed to move.
+type gatePolicy struct {
+	mapper          *tokenize.Mapper
+	currentSecrets  map[string]string
+	excludePatterns []string
+	stubPatterns    []string
+}
+
 // gateBuiltCommits is the pre-ref-update safety gate: it re-reads every
-// object buildPrivateToMirror just wrote into mirror's object database and
-// verifies that no known secret value survived tokenization and that no
-// token refers to an unknown key. The objects exist only as unreferenced
-// loose objects at this point, so failing here leaves mirror's refs and
-// working tree completely untouched.
-func gateBuiltCommits(mirror *gitrepo.Repo, built []BuiltCommit, mapper *tokenize.Mapper, current map[string]string) error {
+// object just written into mirror's object database and verifies it against
+// the current policy — no surviving secret value, no unknown token, no
+// excluded path, and stubs holding exactly the placeholder. The objects
+// exist only as unreferenced loose objects at this point, so failing here
+// leaves mirror's refs and working tree completely untouched.
+func gateBuiltCommits(mirror *gitrepo.Repo, built []BuiltCommit, p gatePolicy) error {
 	for _, bc := range built {
-		for _, f := range leakcheck.ScanBytesForLeaks([]byte(bc.Message), mapper, current) {
+		for _, f := range leakcheck.ScanBytesForLeaks([]byte(bc.Message), p.mapper, p.currentSecrets) {
 			return fmt.Errorf("leak check failed on commit %s message: %s; mirror was not modified", bc.SourceSha, f.Detail)
 		}
 
@@ -320,11 +336,24 @@ func gateBuiltCommits(mirror *gitrepo.Repo, built []BuiltCommit, mapper *tokeniz
 			if slices.Contains(config.BookkeepingPaths, e.Path) {
 				continue
 			}
+			if key, leak := p.mapper.FindLeakingKey(e.Path); leak {
+				return fmt.Errorf("leak check failed on commit %s: path %q contains a value mapped to %s; mirror was not modified", bc.SourceSha, e.Path, key)
+			}
+			if tokenize.IsExcluded(e.Path, p.excludePatterns) {
+				return fmt.Errorf("leak check failed on commit %s: path %q matches an exclude pattern but was built into the mirror tree; mirror was not modified", bc.SourceSha, e.Path)
+			}
+
 			content, err := mirror.CatFileBlob(e.Sha)
 			if err != nil {
 				return err
 			}
-			for _, f := range leakcheck.ScanBytesForLeaks(content, mapper, current) {
+			if tokenize.MatchesAny(e.Path, p.stubPatterns) {
+				if !bytes.Equal(content, stub.Content) {
+					return fmt.Errorf("leak check failed on commit %s: stubbed path %q does not hold the placeholder; mirror was not modified", bc.SourceSha, e.Path)
+				}
+				continue
+			}
+			for _, f := range leakcheck.ScanBytesForLeaks(content, p.mapper, p.currentSecrets) {
 				return fmt.Errorf("leak check failed on commit %s, path %q: %s; mirror was not modified", bc.SourceSha, e.Path, f.Detail)
 			}
 		}

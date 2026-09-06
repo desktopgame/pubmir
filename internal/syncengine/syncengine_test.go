@@ -145,15 +145,37 @@ func setSecrets(t *testing.T, privateDir string, kv map[string]string) {
 	}
 }
 
-// setStubPatterns rewrites private's tracked .pubmir.yml and commits it, so
-// the working tree stays clean for the sync that follows.
-func setStubPatterns(t *testing.T, privateDir string, patterns []string) {
+// runGitStdin is runGit with data piped to the command's stdin.
+func runGitStdin(t *testing.T, dir, stdin string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return string(out)
+}
+
+// gitSucceeds runs git and reports whether it exited zero, for commands
+// whose failure is a meaningful answer rather than a test error.
+func gitSucceeds(t *testing.T, dir string, args ...string) bool {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	return cmd.Run() == nil
+}
+
+// writeConfigField rewrites private's tracked .pubmir.yml and commits it, so
+// the working tree stays clean for the sync or rebuild that follows.
+func writeConfigField(t *testing.T, privateDir string, mutate func(*config.Config), message string) {
 	t.Helper()
 	cfg, err := config.Load(privateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Stub = patterns
+	mutate(cfg)
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +183,17 @@ func setStubPatterns(t *testing.T, privateDir string, patterns []string) {
 	if err := os.WriteFile(filepath.Join(privateDir, ".pubmir.yml"), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	commitAll(t, privateDir, "configure stub patterns")
+	commitAll(t, privateDir, message)
+}
+
+func setStubPatterns(t *testing.T, privateDir string, patterns []string) {
+	t.Helper()
+	writeConfigField(t, privateDir, func(c *config.Config) { c.Stub = patterns }, "configure stub patterns")
+}
+
+func setExcludePatterns(t *testing.T, privateDir string, patterns []string) {
+	t.Helper()
+	writeConfigField(t, privateDir, func(c *config.Config) { c.Exclude = patterns }, "configure exclude patterns")
 }
 
 func sync(t *testing.T, dir string, yes bool) (*syncengine.Report, error) {

@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/desktopgame/pubmir/internal/config"
 	"github.com/desktopgame/pubmir/internal/leakcheck"
@@ -37,8 +38,17 @@ func RunCheck(args []string) error {
 	}
 
 	fmt.Printf("FAIL: %d issue(s) found in mirror repository:\n\n", len(findings))
+	historical := false
 	for _, f := range findings {
 		fmt.Printf("  - %s\n", f)
+		if strings.HasPrefix(f.Detail, "blob ") {
+			historical = true
+		}
+	}
+	if historical {
+		fmt.Print("\nHistorical leak detected: a past commit still carries the value, so\n" +
+			"editing the working tree is not enough. After updating pubmir's rules\n" +
+			"(.pubmir.env, exclude, stub), `pubmir rebuild` may be required.\n")
 	}
 	return fmt.Errorf("check failed with %d issue(s)", len(findings))
 }

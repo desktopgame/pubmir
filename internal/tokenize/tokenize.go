@@ -104,6 +104,11 @@ func UnknownTokens(data []byte, current map[string]string) []string {
 	var unknown []string
 	for _, m := range TokenPattern.FindAllSubmatch(data, -1) {
 		key := string(m[1])
+		// Key is used example for document
+		// defined as always known token
+		if key == "KEY" {
+			continue
+		}
 		if _, ok := current[key]; !ok && !seen[key] {
 			seen[key] = true
 			unknown = append(unknown, key)

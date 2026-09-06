@@ -345,23 +345,15 @@ func runMirrorToPrivate(privateSide, mirrorSide *pairing.Side, branch string, pr
 	return &Report{Direction: "mirror->private", Branch: branch, Applied: built}, nil
 }
 
-// carryForwardPaths are pubmir's own per-repository bookkeeping files.
-// They are never sourced from the other side (see config.ForcedExcludes)
-// but must still survive every synced commit, since sync replaces the
-// whole tree wholesale — without this, the first sync would delete the
-// target's own .pubmir.yml/.gitignore the moment its ref is reset to the
-// newly built tip.
-var carryForwardPaths = []string{config.FileName, config.GitignoreFileName}
-
 // carryForwardEntries reads target's own current HEAD tree (if it has one
-// yet) for carryForwardPaths, so buildPrivateToMirror/buildMirrorToPrivate
+// yet) for config.BookkeepingPaths, so buildPrivateToMirror/buildMirrorToPrivate
 // can re-insert them unchanged into every newly built commit.
 func carryForwardEntries(target *gitrepo.Repo, head string, hasHead bool) ([]gitrepo.TreeEntry, error) {
 	if !hasHead {
 		return nil, nil
 	}
 	var entries []gitrepo.TreeEntry
-	for _, p := range carryForwardPaths {
+	for _, p := range config.BookkeepingPaths {
 		e, ok, err := target.LookupPath(head, p)
 		if err != nil {
 			return nil, err

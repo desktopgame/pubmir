@@ -1,4 +1,7 @@
-# pubmir Skill
+---
+name: pubmir-mirror
+description: Use when working inside a git repository managed by pubmir as a sanitized mirror (it contains .pubmir.yml with role: mirror). Explains the private/mirror security boundary - preserve <PUBMIR:KEY> tokens as-is, freely use `pubmir status`/`pubmir check`, never run `pubmir sync` automatically, and never try to reach the paired private repository.
+---
 
 ## Purpose
 
@@ -36,6 +39,8 @@ or:
 ```yaml
 role: private
 ```
+
+**If `role: private`, stop.** This skill is written for mirror-side work only. Tell the human that AI work is intended to happen in the paired mirror repository instead, and do not proceed with edits here unless the human explicitly overrides that.
 
 When operating in a mirror repository, treat it as the complete working context available to the AI.
 
@@ -109,15 +114,7 @@ The AI may run:
 pubmir check
 ```
 
-Use it when appropriate, especially after making changes that may affect sanitized content.
-
-For example:
-
-```bash
-pubmir check
-```
-
-can be useful before considering work complete.
+Use it when appropriate, especially after making changes that may affect sanitized content, and before considering work complete.
 
 If `pubmir check` reports a possible secret leak or pubmir safety violation:
 

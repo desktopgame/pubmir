@@ -190,6 +190,12 @@ func TestBootstrapAndRoundTrip(t *testing.T) {
 		t.Fatalf(".pubmir.yml in mirror = %q, err=%v", mirrorCfg, err)
 	}
 
+	// The bundled skill installed by `pubmir init` must survive the sync's
+	// wholesale tree replacement (same carry-forward hazard as .pubmir.yml).
+	if _, err := os.Stat(filepath.Join(p.mirror, ".claude/skills/pubmir-mirror/SKILL.md")); err != nil {
+		t.Fatalf("skill file did not survive private->mirror sync: %v", err)
+	}
+
 	clean := runGit(t, p.mirror, "status", "--porcelain")
 	if strings.TrimSpace(clean) != "" {
 		t.Fatalf("mirror working tree not clean after sync:\n%s", clean)

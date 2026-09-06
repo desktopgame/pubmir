@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"pubmir/internal/config"
 	"pubmir/internal/gitrepo"
@@ -124,6 +125,13 @@ func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[strin
 		if f := ScanPathForLeak(rel, mapper); f != nil {
 			findings = append(findings, *f)
 		}
+		// Bookkeeping files (.pubmir.yml, .gitignore, the bundled skill) are
+		// pubmir's own trusted content, not data that passed through
+		// tokenize/detokenize — the skill's documentation legitimately
+		// contains example tokens like <PUBMIR:KEY> that are not real.
+		if slices.Contains(config.BookkeepingPaths, rel) {
+			return nil
+		}
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return err
@@ -141,11 +149,19 @@ func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[strin
 func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[string]string) ([]Finding, error) {
 	var findings []Finding
 
+	bookkeepingBlobs, err := bookkeepingBlobShas(repo)
+	if err != nil {
+		return nil, err
+	}
+
 	paths, err := repo.AllTrackedPathsAllCommits()
 	if err != nil {
 		return nil, err
 	}
 	for _, p := range paths {
+		if slices.Contains(config.BookkeepingPaths, p) {
+			continue
+		}
 		if f := ScanPathForLeak(p, mapper); f != nil {
 			findings = append(findings, *f)
 		}
@@ -156,6 +172,9 @@ func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[st
 		return nil, err
 	}
 	for _, sha := range blobs {
+		if bookkeepingBlobs[sha] {
+			continue
+		}
 		content, err := repo.CatFileBlob(sha)
 		if err != nil {
 			return nil, err
@@ -165,6 +184,30 @@ func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[st
 		}
 	}
 	return findings, nil
+}
+
+// bookkeepingBlobShas collects every blob sha that config.BookkeepingPaths
+// has ever resolved to, across every commit reachable from any ref, so
+// scanHistory can exempt pubmir's own bookkeeping content (which is not
+// data that passed through tokenize/detokenize) from the content scan.
+func bookkeepingBlobShas(repo *gitrepo.Repo) (map[string]bool, error) {
+	commits, err := repo.RevList("--all")
+	if err != nil {
+		return nil, err
+	}
+	shas := map[string]bool{}
+	for _, c := range commits {
+		for _, p := range config.BookkeepingPaths {
+			e, ok, err := repo.LookupPath(c, p)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				shas[e.Sha] = true
+			}
+		}
+	}
+	return shas, nil
 }
 
 // checkNoExcludedFiles flags files matching private's user-defined exclude

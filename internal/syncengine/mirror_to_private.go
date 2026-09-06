@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 
+	"pubmir/internal/config"
 	"pubmir/internal/gitrepo"
 	"pubmir/internal/state"
 	"pubmir/internal/tokenize"
@@ -40,9 +41,11 @@ func buildMirrorToPrivate(
 
 		var privateEntries []gitrepo.TreeEntry
 		for _, e := range entries {
-			// mirror's own .pubmir.yml/.gitignore must never overwrite
-			// private's; carryForward re-inserts private's own copies below.
-			if slices.Contains(carryForwardPaths, e.Path) {
+			// mirror's own .pubmir.yml/.gitignore/skill file must never
+			// overwrite private's; carryForward re-inserts private's own
+			// copies below (nothing to carry forward for the skill file,
+			// which only ever exists on the mirror side).
+			if slices.Contains(config.BookkeepingPaths, e.Path) {
 				continue
 			}
 			if loc := tokenize.TokenPattern.FindString(e.Path); loc != "" {

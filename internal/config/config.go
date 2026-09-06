@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
+
+	"pubmir/internal/skillasset"
 )
 
 type Role string
@@ -47,6 +49,15 @@ var ForcedExcludes = []string{
 	FileName,
 	GitignoreFileName,
 }
+
+// BookkeepingPaths are pubmir's own per-repository files that never flow
+// through the private<->mirror tokenize/detokenize pipeline: each side
+// keeps and carries forward its own copy independently (see
+// syncengine.carryForwardEntries), and none of them are user data, so they
+// must also be exempt from leak/token-validity scanning — the bundled
+// skill's documentation text legitimately contains example tokens like
+// <PUBMIR:KEY> that do not correspond to any real configured secret.
+var BookkeepingPaths = []string{FileName, GitignoreFileName, skillasset.PubmirMirrorSkillRelPath}
 
 type Config struct {
 	Role    Role     `yaml:"role"`

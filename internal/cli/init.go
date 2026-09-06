@@ -11,6 +11,7 @@ import (
 	"pubmir/internal/config"
 	"pubmir/internal/gitrepo"
 	"pubmir/internal/secrets"
+	"pubmir/internal/skillasset"
 	"pubmir/internal/state"
 )
 
@@ -60,11 +61,24 @@ func RunInit(args []string) error {
 		return err
 	}
 
-	// pubmir's own tracked scaffolding (.pubmir.yml, .gitignore) must be
-	// committed here so the working tree starts clean — sync refuses to run
-	// against a dirty mirror/private working tree, and would otherwise
-	// reject the very first sync right after init.
-	if err := repo.Add(config.FileName, config.GitignoreFileName); err != nil {
+	addPaths := []string{config.FileName, config.GitignoreFileName}
+	skillInstalled := false
+	if roleVal == config.RoleMirror {
+		skillInstalled, err = installMirrorSkill(repo.Root)
+		if err != nil {
+			return err
+		}
+		if skillInstalled {
+			addPaths = append(addPaths, skillasset.PubmirMirrorSkillRelPath)
+		}
+	}
+
+	// pubmir's own tracked scaffolding (.pubmir.yml, .gitignore, and on the
+	// mirror side the bundled Claude Code skill) must be committed here so
+	// the working tree starts clean — sync refuses to run against a dirty
+	// mirror/private working tree, and would otherwise reject the very
+	// first sync right after init.
+	if err := repo.Add(addPaths...); err != nil {
 		return err
 	}
 	staged, err := repo.HasStagedChanges()
@@ -93,7 +107,31 @@ func RunInit(args []string) error {
 	if roleVal == config.RolePrivate {
 		fmt.Printf("Edit %s to add secret values, then run `pubmir sync`.\n", filepath.Join(repo.Root, config.EnvFileName))
 	}
+	if skillInstalled {
+		fmt.Printf("Installed Claude Code skill: %s\n", skillasset.PubmirMirrorSkillRelPath)
+	}
 	return nil
+}
+
+// installMirrorSkill writes pubmir's bundled Claude Code skill into the
+// mirror repository so it ships to collaborators (and AI agents) on
+// `git clone`, per Claude Code's project-skill convention. It never
+// overwrites an existing file — if one is already there (e.g. the human
+// customized it), it is left untouched.
+func installMirrorSkill(root string) (installed bool, err error) {
+	path := filepath.Join(root, filepath.FromSlash(skillasset.PubmirMirrorSkillRelPath))
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(path, skillasset.PubmirMirrorSkillMD, 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ensureGitignore appends any missing pubmir-managed entries to .gitignore

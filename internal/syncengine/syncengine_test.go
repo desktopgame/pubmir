@@ -709,6 +709,33 @@ func TestCheckFlagsPrivateBlobReachableInMirror(t *testing.T) {
 	}
 }
 
+// git rewrites line endings in the working copy when core.autocrlf is on
+// (the default on Windows), so comparing the stub against the file on disk
+// reports tampering that never happened. The committed blob is what a clone
+// or push actually carries, and it is unaffected.
+func TestCheckAcceptsStubUnderAutocrlf(t *testing.T) {
+	p := setupStubbedPair(t)
+
+	runGit(t, p.mirror, "config", "core.autocrlf", "true")
+	stubPath := filepath.Join(p.mirror, "config", "production.yml")
+	if err := os.Remove(stubPath); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, p.mirror, "checkout", "--", "config/production.yml")
+
+	onDisk, err := os.ReadFile(stubPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(onDisk), "\r\n") {
+		t.Skip("git did not apply CRLF conversion here; nothing to regress against")
+	}
+
+	if findings := checkMirror(t, p); len(findings) != 0 {
+		t.Fatalf("CRLF in the working copy must not read as a modified stub, got %+v", findings)
+	}
+}
+
 // An unreachable leftover — the shape a rebuild leaves behind, kept alive by
 // the reflog — is not published, so it must not fail the check.
 func TestCheckIgnoresUnreachableLeftoverBlob(t *testing.T) {

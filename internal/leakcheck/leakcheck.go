@@ -181,21 +181,39 @@ func checkStubs(mirror, private *pairing.Side, reachable map[string]bool) ([]Fin
 		return nil, err
 	}
 
+	// Compare against mirror's committed blobs rather than the files on
+	// disk. The blob is what a clone or push carries; the working copy is a
+	// local rendering git may rewrite — with core.autocrlf enabled it hands
+	// back CRLF for the LF pubmir wrote, which would look like tampering.
+	mirrorHead, mirrorHasHead, err := mirror.Repo.RevParseVerify("HEAD")
+	if err != nil || !mirrorHasHead {
+		return nil, err
+	}
+	mirrorEntries, err := mirror.Repo.LsTreeRecursive(mirrorHead + "^{tree}")
+	if err != nil {
+		return nil, err
+	}
+	mirrorByPath := make(map[string]gitrepo.TreeEntry, len(mirrorEntries))
+	for _, e := range mirrorEntries {
+		mirrorByPath[e.Path] = e
+	}
+
 	var findings []Finding
 	for _, e := range privateEntries {
 		if !tokenize.MatchesAny(e.Path, private.Config.Stub) {
 			continue
 		}
 
-		content, err := os.ReadFile(filepath.Join(mirror.Root, filepath.FromSlash(e.Path)))
+		mirrorEntry, ok := mirrorByPath[e.Path]
+		if !ok {
+			findings = append(findings, Finding{
+				Category: "stub-missing",
+				Detail:   fmt.Sprintf("%s is stubbed in private but missing from mirror", e.Path),
+			})
+			continue
+		}
+		content, err := mirror.Repo.CatFileBlob(mirrorEntry.Sha)
 		if err != nil {
-			if os.IsNotExist(err) {
-				findings = append(findings, Finding{
-					Category: "stub-missing",
-					Detail:   fmt.Sprintf("%s is stubbed in private but missing from mirror", e.Path),
-				})
-				continue
-			}
 			return nil, err
 		}
 
@@ -214,6 +232,14 @@ func checkStubs(mirror, private *pairing.Side, reachable map[string]bool) ([]Fin
 			continue
 		}
 
+		// The committed copy is a placeholder; the checkout should be one
+		// too. Line endings are compared loosely because git rewrites them
+		// on checkout when core.autocrlf is set, which is not tampering.
+		if f := checkStubWorkingCopy(mirror.Root, e.Path); f != nil {
+			findings = append(findings, *f)
+			continue
+		}
+
 		if reachable[e.Sha] {
 			findings = append(findings, Finding{
 				Category: "stub-content-leak",
@@ -223,6 +249,36 @@ func checkStubs(mirror, private *pairing.Side, reachable map[string]bool) ([]Fin
 		}
 	}
 	return findings, nil
+}
+
+func checkStubWorkingCopy(mirrorRoot, path string) *Finding {
+	onDisk, err := os.ReadFile(filepath.Join(mirrorRoot, filepath.FromSlash(path)))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &Finding{
+				Category: "stub-missing",
+				Detail:   fmt.Sprintf("%s is stubbed in private but missing from mirror's working tree", path),
+			}
+		}
+		return &Finding{
+			Category: "stub-modified",
+			Detail:   fmt.Sprintf("%s could not be read from mirror's working tree: %v", path, err),
+		}
+	}
+	if !bytes.Equal(normalizeEOL(onDisk), normalizeEOL(stub.Content)) {
+		return &Finding{
+			Category: "stub-modified",
+			Detail: fmt.Sprintf("%s holds the stub placeholder in mirror's history but not in its working tree; "+
+				"restore it with `git checkout -- %s`", path, path),
+		}
+	}
+	return nil
+}
+
+// normalizeEOL makes CRLF and LF compare equal, so a checkout performed with
+// core.autocrlf enabled is not mistaken for an edit.
+func normalizeEOL(b []byte) []byte {
+	return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))
 }
 
 func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys map[string]bool) ([]Finding, error) {

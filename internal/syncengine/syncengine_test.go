@@ -308,6 +308,78 @@ func TestUnknownTokenAbortsWithoutTouchingPrivate(t *testing.T) {
 	}
 }
 
+// The pre-ref-update gate must inspect the built file content, not only the
+// commit message: a token naming a key that does not exist would otherwise
+// reach mirror's ref unnoticed and be undecodable on the way back.
+func TestGateScansContentNotOnlyMessage(t *testing.T) {
+	p := setupPair(t)
+	setSecrets(t, p.private, map[string]string{"IP": "203.0.113.42"})
+	writeFile(t, p.private, "a.txt", "seed\n")
+	commitAll(t, p.private, "seed")
+	if _, err := sync(t, p.private, false); err != nil {
+		t.Fatal(err)
+	}
+	mirrorBefore := headSha(t, p.mirror)
+
+	// The message is clean; only the file content carries the bad token.
+	writeFile(t, p.private, "a.txt", "value is <PUBMIR:GHOST_KEY>\n")
+	commitAll(t, p.private, "innocuous message")
+
+	if _, err := sync(t, p.private, false); err == nil {
+		t.Fatal("expected the leak-check gate to reject content with an unknown token")
+	}
+	if after := headSha(t, p.mirror); after != mirrorBefore {
+		t.Fatalf("mirror ref moved despite a failed gate: %s -> %s", mirrorBefore, after)
+	}
+}
+
+// A previously-synced branch whose commits have vanished must stop the sync
+// rather than being treated as "nothing to sync" and silently re-created.
+func TestVanishedTargetHistoryRejected(t *testing.T) {
+	p := setupPair(t)
+	writeFile(t, p.private, "a.txt", "seed\n")
+	commitAll(t, p.private, "seed")
+	if _, err := sync(t, p.private, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete mirror's branch: HEAD still points at refs/heads/main, which
+	// now resolves to nothing (an unborn branch).
+	runGit(t, p.mirror, "update-ref", "-d", "refs/heads/main")
+
+	writeFile(t, p.private, "a.txt", "further work\n")
+	commitAll(t, p.private, "further work")
+
+	_, err := sync(t, p.private, false)
+	if err == nil {
+		t.Fatal("expected sync to refuse to run against a branch whose synced history vanished")
+	}
+	if !strings.Contains(err.Error(), "vanished") {
+		t.Fatalf("expected a 'history vanished' error, got: %v", err)
+	}
+}
+
+// A secrets file is just as dangerous in a subdirectory as at the root, so
+// the forced excludes must match at any depth.
+func TestSecretsFileInSubdirectoryNotSynced(t *testing.T) {
+	p := setupPair(t)
+	setSecrets(t, p.private, map[string]string{"IP": "203.0.113.42"})
+	writeFile(t, p.private, "sub/.pubmir.env", "IP=203.0.113.42\n")
+	writeFile(t, p.private, "docs/notes.txt", "ordinary content\n")
+	runGit(t, p.private, "add", "-f", "sub/.pubmir.env", "docs/notes.txt")
+	runGit(t, p.private, "commit", "-q", "-m", "stray secrets file in a subdirectory")
+
+	if _, err := sync(t, p.private, false); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(p.mirror, "sub/.pubmir.env")); !os.IsNotExist(err) {
+		t.Fatalf("a .pubmir.env in a subdirectory leaked into mirror (err=%v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(p.mirror, "docs/notes.txt")); err != nil {
+		t.Fatalf("ordinary content should still sync: %v", err)
+	}
+}
+
 func TestMergeCommitRejected(t *testing.T) {
 	p := setupPair(t)
 	writeFile(t, p.private, "a.txt", "seed\n")

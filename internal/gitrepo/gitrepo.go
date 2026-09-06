@@ -176,24 +176,37 @@ func (r *Repo) RevListCount(rangeSpec string) (int, error) {
 }
 
 // RevListAllBlobs returns the sha of every unique blob reachable from any
-// ref, for full-history leak scanning.
+// ref, for full-history leak scanning. Object types are resolved with a
+// single `cat-file --batch-check` process rather than one process per
+// object, so the cost stays reasonable on repositories with long histories.
 func (r *Repo) RevListAllBlobs() ([]string, error) {
 	out, err := r.run(nil, "rev-list", "--objects", "--all")
 	if err != nil {
 		return nil, err
 	}
-	var shas []string
+
+	var ids strings.Builder
 	for _, line := range splitLines(out) {
-		fields := strings.SplitN(line, " ", 2)
-		if len(fields) == 0 {
+		sha, _, _ := strings.Cut(line, " ")
+		if sha == "" {
 			continue
 		}
-		typ, err := r.run(nil, "cat-file", "-t", fields[0])
-		if err != nil {
-			continue
-		}
-		if strings.TrimSpace(typ) == "blob" {
-			shas = append(shas, fields[0])
+		ids.WriteString(sha)
+		ids.WriteByte('\n')
+	}
+	if ids.Len() == 0 {
+		return nil, nil
+	}
+
+	checked, err := r.run([]byte(ids.String()), "cat-file", "--batch-check=%(objectname) %(objecttype)")
+	if err != nil {
+		return nil, err
+	}
+	var shas []string
+	for _, line := range splitLines(checked) {
+		sha, typ, ok := strings.Cut(line, " ")
+		if ok && typ == "blob" {
+			shas = append(shas, sha)
 		}
 	}
 	return shas, nil
@@ -222,6 +235,14 @@ func (r *Repo) AllTrackedPathsAllCommits() ([]string, error) {
 		}
 	}
 	return paths, nil
+}
+
+// ShortSha abbreviates an object id for display.
+func ShortSha(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
 }
 
 func splitLines(s string) []string {

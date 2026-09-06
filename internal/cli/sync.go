@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"pubmir/internal/gitrepo"
 	"pubmir/internal/syncengine"
 )
 
@@ -32,7 +33,7 @@ func RunSync(args []string) error {
 
 	fmt.Printf("Synced %s (branch %s): %d commit(s) applied\n\n", report.Direction, report.Branch, len(report.Applied))
 	for _, bc := range report.Applied {
-		fmt.Printf("  %s -> %s  %s\n", shortSha(bc.SourceSha), shortSha(bc.TargetSha), bc.Message)
+		fmt.Printf("  %s -> %s  %s\n", gitrepo.ShortSha(bc.SourceSha), gitrepo.ShortSha(bc.TargetSha), bc.Message)
 	}
 	return nil
 }

@@ -41,10 +41,13 @@ const GitignoreFileName = ".gitignore"
 // must never overwrite mirror's, or vice versa; syncengine carries each
 // side's own copies of these two forward across every synced commit
 // instead).
+// The secrets-file entries deliberately use a "**/" prefix: a bare literal
+// pattern only matches at the repository root, so a stray file named
+// .pubmir.env in any subdirectory would otherwise be copied into mirror.
 var ForcedExcludes = []string{
 	".git/**",
-	EnvFileName,
-	AltSecretsFile,
+	"**/" + EnvFileName,
+	"**/" + AltSecretsFile,
 	PubmirDirName + "/**",
 	FileName,
 	GitignoreFileName,

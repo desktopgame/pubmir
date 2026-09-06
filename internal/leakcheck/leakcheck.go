@@ -91,13 +91,25 @@ func Check(mirror, private *pairing.Side) ([]Finding, error) {
 	findings = append(findings, histFindings...)
 
 	// 4: private's exclude patterns must not match anything present in mirror.
-	findings = append(findings, checkNoExcludedFiles(mirror.Root, private.Config.Exclude)...)
+	excFindings, err := checkNoExcludedFiles(mirror.Root, private.Config.Exclude)
+	if err != nil {
+		return nil, err
+	}
+	findings = append(findings, excFindings...)
 
-	// 5: secrets files must never exist in mirror.
-	findings = append(findings, checkNoSecretsFiles(mirror.Root)...)
+	// 5: secrets files must never exist in mirror, at any depth.
+	secFindings, err := checkNoSecretsFiles(mirror.Root)
+	if err != nil {
+		return nil, err
+	}
+	findings = append(findings, secFindings...)
 
 	// 6: no nested/foreign ".git" path other than mirror's own top-level one.
-	findings = append(findings, checkNoForeignGitDir(mirror.Root)...)
+	gitFindings, err := checkNoForeignGitDir(mirror.Root)
+	if err != nil {
+		return nil, err
+	}
+	findings = append(findings, gitFindings...)
 
 	return findings, nil
 }
@@ -217,15 +229,19 @@ func bookkeepingBlobShas(repo *gitrepo.Repo) (map[string]bool, error) {
 // on disk in mirror too — it just never gets pushed since it is gitignored)
 // or are covered by their own dedicated checks (secrets file presence,
 // foreign .git dirs) elsewhere in this package.
-func checkNoExcludedFiles(root string, exclude []string) []Finding {
+// Every walk below propagates its errors rather than skipping the affected
+// subtree: `pubmir check` reporting success is a statement that the whole
+// mirror was inspected, so an unreadable directory must fail the check
+// loudly instead of silently narrowing what was scanned.
+func checkNoExcludedFiles(root string, exclude []string) ([]Finding, error) {
 	var findings []Finding
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			return err
 		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			return nil
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
 		}
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
@@ -239,28 +255,53 @@ func checkNoExcludedFiles(root string, exclude []string) []Finding {
 		}
 		return nil
 	})
-	return findings
-}
-
-func checkNoSecretsFiles(root string) []Finding {
-	var findings []Finding
-	for _, name := range []string{config.EnvFileName, config.AltSecretsFile} {
-		if _, err := os.Stat(filepath.Join(root, name)); err == nil {
-			findings = append(findings, Finding{Category: "secrets-file-present", Detail: fmt.Sprintf("%s must not exist in mirror", name)})
-		}
+	if err != nil {
+		return nil, fmt.Errorf("scanning mirror for excluded files: %w", err)
 	}
-	return findings
+	return findings, nil
 }
 
-func checkNoForeignGitDir(root string) []Finding {
+// checkNoSecretsFiles walks the whole tree rather than stat-ing the root:
+// a secrets file is just as dangerous in a subdirectory, and the forced
+// exclude patterns match at any depth too.
+func checkNoSecretsFiles(root string) ([]Finding, error) {
+	secretNames := []string{config.EnvFileName, config.AltSecretsFile}
 	var findings []Finding
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			if rel == ".git" || rel == config.PubmirDirName {
+				return filepath.SkipDir
+			}
 			return nil
 		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			return nil
+		if slices.Contains(secretNames, d.Name()) {
+			findings = append(findings, Finding{Category: "secrets-file-present", Detail: fmt.Sprintf("%s must not exist in mirror", rel)})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scanning mirror for secrets files: %w", err)
+	}
+	return findings, nil
+}
+
+func checkNoForeignGitDir(root string) ([]Finding, error) {
+	var findings []Finding
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
 		}
 		rel = filepath.ToSlash(rel)
 		if rel == ".git" {
@@ -274,5 +315,8 @@ func checkNoForeignGitDir(root string) []Finding {
 		}
 		return nil
 	})
-	return findings
+	if err != nil {
+		return nil, fmt.Errorf("scanning mirror for foreign .git paths: %w", err)
+	}
+	return findings, nil
 }

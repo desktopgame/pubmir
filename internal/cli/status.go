@@ -61,7 +61,7 @@ func RunStatus(args []string) error {
 	if len(bs.Mapping) > 0 {
 		fmt.Println("\nCommit mapping:")
 		for _, m := range bs.Mapping {
-			fmt.Printf("  private %s <-> mirror %s\n", shortSha(m.Private), shortSha(m.Mirror))
+			fmt.Printf("  private %s <-> mirror %s\n", gitrepo.ShortSha(m.Private), gitrepo.ShortSha(m.Mirror))
 		}
 	}
 	return nil

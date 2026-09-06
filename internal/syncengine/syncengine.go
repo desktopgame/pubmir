@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"pubmir/internal/config"
@@ -199,8 +200,16 @@ func preflight(privateSide, mirrorSide *pairing.Side, branch string) (*preflight
 }
 
 func checkNotRewritten(repo *gitrepo.Repo, label, lastSha, head string, hasHead bool) error {
-	if lastSha == "" || !hasHead {
+	if lastSha == "" {
+		// Nothing has ever been synced on this branch, so there is no
+		// recorded history that could have been rewritten.
 		return nil
+	}
+	if !hasHead {
+		// A previously-synced branch that now has no commits at all was
+		// deleted or reset. Treating it as "nothing to sync" would let the
+		// next sync silently recreate the ref and orphan the old history.
+		return fmt.Errorf("%s history vanished: commit %s was synced previously, but the current branch now has no commits (deleted or reset?); resolve manually before syncing", label, lastSha)
 	}
 	ok, err := repo.IsAncestor(lastSha, head)
 	if err != nil {
@@ -266,27 +275,60 @@ func runPrivateToMirror(privateSide, mirrorSide *pairing.Side, branch string, pr
 		return nil, err
 	}
 
-	for _, bc := range built {
-		content := []byte(bc.Message)
-		for _, f := range leakcheck.ScanBytesForLeaks(content, mapper, current) {
-			return nil, fmt.Errorf("leak check failed on commit %s message: %s; mirror was not modified", bc.SourceSha, f.Detail)
-		}
-	}
-
-	newTip := built[len(built)-1].TargetSha
-	if err := updateRef(mirrorSide.Repo, "refs/heads/"+branch, pre.mirrorHead, pre.mirrorHasHead, newTip); err != nil {
-		return nil, fmt.Errorf("mirror repository was left untouched, but applying the new commits failed: %w", err)
+	if err := gateBuiltCommits(mirrorSide.Repo, built, mapper, current); err != nil {
+		return nil, err
 	}
 
 	bs := pre.branchState
 	for _, bc := range built {
 		bs.Record(bc.SourceSha, bc.TargetSha)
 	}
-	if err := state.SaveBoth(privateSide.Root, mirrorSide.Root, branch, bs); err != nil {
+
+	newTip := built[len(built)-1].TargetSha
+	if err := finalizeSync(mirrorSide.Repo, "mirror", "refs/heads/"+branch, pre.mirrorHead, pre.mirrorHasHead, newTip,
+		privateSide.Root, mirrorSide.Root, branch, bs); err != nil {
 		return nil, err
 	}
 
 	return &Report{Direction: "private->mirror", Branch: branch, Applied: built}, nil
+}
+
+// gateBuiltCommits is the pre-ref-update safety gate: it re-reads every
+// object buildPrivateToMirror just wrote into mirror's object database and
+// verifies that no known secret value survived tokenization and that no
+// token refers to an unknown key. The objects exist only as unreferenced
+// loose objects at this point, so failing here leaves mirror's refs and
+// working tree completely untouched.
+func gateBuiltCommits(mirror *gitrepo.Repo, built []BuiltCommit, mapper *tokenize.Mapper, current map[string]string) error {
+	for _, bc := range built {
+		for _, f := range leakcheck.ScanBytesForLeaks([]byte(bc.Message), mapper, current) {
+			return fmt.Errorf("leak check failed on commit %s message: %s; mirror was not modified", bc.SourceSha, f.Detail)
+		}
+
+		commit, err := mirror.CommitInfo(bc.TargetSha)
+		if err != nil {
+			return err
+		}
+		entries, err := mirror.LsTreeRecursive(commit.Tree)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			// Bookkeeping files are pubmir's own content, carried forward
+			// verbatim rather than tokenized (see config.BookkeepingPaths).
+			if slices.Contains(config.BookkeepingPaths, e.Path) {
+				continue
+			}
+			content, err := mirror.CatFileBlob(e.Sha)
+			if err != nil {
+				return err
+			}
+			for _, f := range leakcheck.ScanBytesForLeaks(content, mapper, current) {
+				return fmt.Errorf("leak check failed on commit %s, path %q: %s; mirror was not modified", bc.SourceSha, e.Path, f.Detail)
+			}
+		}
+	}
+	return nil
 }
 
 func runMirrorToPrivate(privateSide, mirrorSide *pairing.Side, branch string, pre *preflightResult, opts Options) (*Report, error) {
@@ -319,7 +361,7 @@ func runMirrorToPrivate(privateSide, mirrorSide *pairing.Side, branch string, pr
 
 	fmt.Fprintf(opts.Stdout, "Current repository: mirror\nTarget repository:  private\n\n%d commit(s) will be applied to PRIVATE:\n\n", len(built))
 	for _, bc := range built {
-		fmt.Fprintf(opts.Stdout, "  %s  %s\n", shortSha(bc.TargetSha), bc.Message)
+		fmt.Fprintf(opts.Stdout, "  %s  %s\n", gitrepo.ShortSha(bc.TargetSha), bc.Message)
 	}
 	fmt.Fprintln(opts.Stdout)
 
@@ -329,16 +371,14 @@ func runMirrorToPrivate(privateSide, mirrorSide *pairing.Side, branch string, pr
 		}
 	}
 
-	newTip := built[len(built)-1].TargetSha
-	if err := updateRef(privateSide.Repo, "refs/heads/"+branch, pre.privateHead, pre.privateHasHead, newTip); err != nil {
-		return nil, fmt.Errorf("private repository was left untouched, but applying the new commits failed: %w", err)
-	}
-
 	bs := pre.branchState
 	for _, bc := range built {
 		bs.Record(bc.TargetSha, bc.SourceSha)
 	}
-	if err := state.SaveBoth(privateSide.Root, mirrorSide.Root, branch, bs); err != nil {
+
+	newTip := built[len(built)-1].TargetSha
+	if err := finalizeSync(privateSide.Repo, "private", "refs/heads/"+branch, pre.privateHead, pre.privateHasHead, newTip,
+		privateSide.Root, mirrorSide.Root, branch, bs); err != nil {
 		return nil, err
 	}
 
@@ -365,15 +405,37 @@ func carryForwardEntries(target *gitrepo.Repo, head string, hasHead bool) ([]git
 	return entries, nil
 }
 
-func updateRef(repo *gitrepo.Repo, ref, oldHead string, hasOldHead bool, newTip string) error {
+// finalizeSync commits a built sync to the target repository: it moves the
+// branch ref, records the commit mapping, and only then brings the working
+// tree up to date.
+//
+// The order matters. Moving the ref is the point of no return, so state is
+// recorded immediately after it and before the purely local working-tree
+// reset. Each failure mode reports exactly how far the operation actually
+// got — claiming the repository is untouched once its branch has already
+// moved would send the user looking in the wrong place.
+func finalizeSync(target *gitrepo.Repo, label, ref, oldHead string, hasOldHead bool, newTip string,
+	privateRoot, mirrorRoot, branch string, bs *state.BranchState) error {
+
 	old := gitrepo.ZeroSha
 	if hasOldHead {
 		old = oldHead
 	}
-	if err := repo.UpdateRef(ref, newTip, old); err != nil {
-		return err
+	if err := target.UpdateRef(ref, newTip, old); err != nil {
+		return fmt.Errorf("%s repository was left untouched: updating %s failed: %w", label, ref, err)
 	}
-	return repo.ResetHard(newTip)
+
+	if err := state.SaveBoth(privateRoot, mirrorRoot, branch, bs); err != nil {
+		return fmt.Errorf("the commits WERE applied to %s (%s now points at %s), but recording sync state failed: %w\n"+
+			"Until the state file is written both sides will look unsynchronized and `pubmir sync` will report divergence; "+
+			"fix the underlying problem, then re-run `pubmir status` to confirm", label, ref, newTip, err)
+	}
+
+	if err := target.ResetHard(newTip); err != nil {
+		return fmt.Errorf("the commits WERE applied to %s and the sync was recorded, but its working tree could not be updated: %w\n"+
+			"Run `git -C %s reset --hard %s` to finish", label, err, target.Root, newTip)
+	}
+	return nil
 }
 
 func confirm(in io.Reader, out io.Writer) bool {
@@ -384,11 +446,4 @@ func confirm(in io.Reader, out io.Writer) bool {
 	}
 	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
 	return answer == "y" || answer == "yes"
-}
-
-func shortSha(sha string) string {
-	if len(sha) > 7 {
-		return sha[:7]
-	}
-	return sha
 }

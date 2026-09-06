@@ -50,6 +50,9 @@ func Rebuild(cwd string, opts Options) (*RebuildReport, error) {
 	if err := checkSecretsNotTracked(privateSide); err != nil {
 		return nil, err
 	}
+	if err := checkNoRetiredSecrets(privateSide); err != nil {
+		return nil, err
+	}
 	branch, err := checkBranchMatch(privateSide, mirrorSide)
 	if err != nil {
 		return nil, err

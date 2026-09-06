@@ -160,6 +160,37 @@ func (h *History) ValuesForKey(key string) []string {
 	return h.Values[key]
 }
 
+// RetiredKeys returns, sorted, the keys the local history still remembers
+// that are no longer defined in .pubmir.env.
+//
+// pubmir cannot tell on its own whether such a key was retired on purpose
+// ("this value is not secret after all") or deleted by accident, and the two
+// call for opposite handling — emitting the real value versus continuing to
+// hide it. Callers therefore stop and ask rather than guessing, because
+// guessing wrong means publishing a secret.
+func RetiredKeys(current map[string]string, h *History) []string {
+	var keys []string
+	for k := range h.Values {
+		if _, ok := current[k]; !ok {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// RetiredKeysError explains the situation RetiredKeys detects and spells out
+// both ways forward. It never prints the values themselves.
+func RetiredKeysError(repoRoot string, keys []string) error {
+	return fmt.Errorf("secret key(s) %s were removed from %s but their past values are still recorded in %s.\n\n"+
+		"pubmir would keep replacing those values with <PUBMIR:KEY> tokens that nothing can resolve any more, "+
+		"which blocks sync, rebuild and check.\n\n"+
+		"If they are genuinely no longer secret: delete those entries from %s, then run `pubmir rebuild` to "+
+		"regenerate the mirror without the tokens.\n"+
+		"If they were removed by mistake: restore them to %s.",
+		strings.Join(keys, ", "), config.EnvFileName, historyPath(repoRoot), config.HistoryFile, config.EnvFileName)
+}
+
 // LoadCurrentAndRecord loads .pubmir.env and records its values into the
 // local secrets history, saving the history if it changed. This is the
 // single place .pubmir.env should be read from so history-tracking happens

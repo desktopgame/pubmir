@@ -319,6 +319,23 @@ Stub files are not writable through pubmir. Refusing to apply this change to the
 
 ただしこれは pubmir が実際に観測した値のみのベストエフォートな記録です。pubmir を一度も実行せずに値を変更した場合や、履歴ファイルを失った場合は追跡できません。
 
+### 秘密でなくなったキーを外すとき
+
+`.pubmir.env` からキーを削除しただけでは足りません。履歴にその値が残っているため、pubmir はトークン化を続ける一方で `<PUBMIR:KEY>` を解決できなくなり、**sync / rebuild / check がすべて止まります**。
+
+pubmir は「もう秘密でないので外した」のか「うっかり消した」のかを区別できず、間違えれば実値を公開してしまうため、勝手に判断せず次のように停止します。
+
+```text
+Error: secret key(s) DOMAIN were removed from .pubmir.env but their past values are
+still recorded in .../.pubmir/secrets-history.json.
+
+If they are genuinely no longer secret: delete those entries from secrets-history.json,
+then run `pubmir rebuild` to regenerate the mirror without the tokens.
+If they were removed by mistake: restore them to .pubmir.env.
+```
+
+本当に秘密でなくなった場合は、`.pubmir/secrets-history.json` から該当キーの項目を削除し（ローカル専用ファイルなので手で編集して構いません）、`pubmir rebuild` を実行してください。過去の履歴も含めてトークンが実値へ戻ります。
+
 ## Claude Code skill の同梱
 
 `pubmir init --role mirror` を実行すると、mirror リポジトリに Claude Code 用の skill が配置されます。

@@ -70,6 +70,9 @@ func Run(cwd string, opts Options) (*Report, error) {
 	if err := checkSecretsNotTracked(privateSide); err != nil {
 		return nil, err
 	}
+	if err := checkNoRetiredSecrets(privateSide); err != nil {
+		return nil, err
+	}
 
 	branch, err := checkBranchMatch(privateSide, mirrorSide)
 	if err != nil {
@@ -101,6 +104,22 @@ func checkSecretsNotTracked(privateSide *pairing.Side) error {
 		if tracked {
 			return fmt.Errorf("%s is tracked by git in the private repository; remove it from the index (e.g. `git rm --cached %s`) before syncing", name, name)
 		}
+	}
+	return nil
+}
+
+// checkNoRetiredSecrets stops before any work is done if a secret key was
+// dropped from .pubmir.env while its past values remain in the local
+// history — otherwise pubmir emits tokens it can no longer resolve and every
+// direction of sync, plus rebuild and check, fails with a symptom rather
+// than the cause.
+func checkNoRetiredSecrets(privateSide *pairing.Side) error {
+	current, history, err := secrets.LoadCurrentAndRecord(privateSide.Root)
+	if err != nil {
+		return err
+	}
+	if retired := secrets.RetiredKeys(current, history); len(retired) > 0 {
+		return secrets.RetiredKeysError(privateSide.Root, retired)
 	}
 	return nil
 }

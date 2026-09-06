@@ -34,11 +34,21 @@ func (f Finding) String() string {
 // value that should have been tokenized but was not, and (b) a
 // <PUBMIR:KEY> token whose KEY is not a currently-known secret key.
 func ScanBytesForLeaks(content []byte, mapper *tokenize.Mapper, currentKeys map[string]string) []Finding {
+	return scanBytes(content, mapper, currentKeys, nil)
+}
+
+// scanBytes is ScanBytesForLeaks with the option to stay quiet about tokens
+// whose key is already reported through a more specific finding, so the
+// output points at a cause instead of repeating its symptoms.
+func scanBytes(content []byte, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys map[string]bool) []Finding {
 	var findings []Finding
 	if key, ok := mapper.FindLeakingKey(string(content)); ok {
 		findings = append(findings, Finding{Category: "content-leak", Detail: fmt.Sprintf("content still contains a value that should have become %s", key)})
 	}
 	for _, k := range tokenize.UnknownTokens(content, currentKeys) {
+		if explainedKeys[k] {
+			continue
+		}
 		findings = append(findings, Finding{Category: "unknown-token", Detail: fmt.Sprintf("token <PUBMIR:%s> has no corresponding secret", k)})
 	}
 	return findings
@@ -78,15 +88,30 @@ func Check(mirror, private *pairing.Side) ([]Finding, error) {
 
 	var findings []Finding
 
+	// A key dropped from .pubmir.env while its values linger in the local
+	// history produces tokens nothing can resolve. Report that cause once,
+	// and suppress the per-occurrence unknown-token findings it explains.
+	retired := secrets.RetiredKeys(current, history)
+	explained := make(map[string]bool, len(retired))
+	for _, k := range retired {
+		explained[k] = true
+		findings = append(findings, Finding{
+			Category: "retired-secret",
+			Detail: fmt.Sprintf("%s was removed from %s but its past values remain in %s, so <PUBMIR:%s> can no longer be resolved; "+
+				"delete that entry from the history file if it is no longer secret, or restore it to %s",
+				k, config.EnvFileName, config.HistoryFile, k, config.EnvFileName),
+		})
+	}
+
 	// 2/3/8: working tree content, path, and generic-pattern scan.
-	wtFindings, err := scanWorkingTree(mirror.Root, mapper, current)
+	wtFindings, err := scanWorkingTree(mirror.Root, mapper, current, explained)
 	if err != nil {
 		return nil, err
 	}
 	findings = append(findings, wtFindings...)
 
 	// 2/3: full history content and path scan.
-	histFindings, err := scanHistory(mirror.Repo, mapper, current)
+	histFindings, err := scanHistory(mirror.Repo, mapper, current, explained)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +205,7 @@ func checkStubs(mirror, private *pairing.Side) ([]Finding, error) {
 	return findings, nil
 }
 
-func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[string]string) ([]Finding, error) {
+func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys map[string]bool) ([]Finding, error) {
 	var findings []Finding
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -214,7 +239,7 @@ func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[strin
 		if err != nil {
 			return err
 		}
-		findings = append(findings, ScanBytesForLeaks(content, mapper, currentKeys)...)
+		findings = append(findings, scanBytes(content, mapper, currentKeys, explainedKeys)...)
 		findings = append(findings, scanGenericPatterns(content, rel)...)
 		return nil
 	})
@@ -224,7 +249,7 @@ func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[strin
 	return findings, nil
 }
 
-func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[string]string) ([]Finding, error) {
+func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys map[string]bool) ([]Finding, error) {
 	var findings []Finding
 
 	bookkeepingBlobs, err := bookkeepingBlobShas(repo)
@@ -257,7 +282,7 @@ func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[st
 		if err != nil {
 			return nil, err
 		}
-		for _, f := range ScanBytesForLeaks(content, mapper, currentKeys) {
+		for _, f := range scanBytes(content, mapper, currentKeys, explainedKeys) {
 			findings = append(findings, Finding{Category: f.Category, Detail: fmt.Sprintf("blob %s: %s", sha, f.Detail)})
 		}
 	}

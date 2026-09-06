@@ -62,13 +62,21 @@ var ForcedExcludes = []string{
 // <PUBMIR:KEY> that do not correspond to any real configured secret.
 var BookkeepingPaths = []string{FileName, GitignoreFileName, skillasset.PubmirMirrorSkillRelPath}
 
+// Config is the git-tracked half of a repository's pubmir configuration.
+//
+// Exclude and Stub describe what leaves the private repository, so only the
+// private side's values are ever consulted. A mirror's file therefore holds
+// its role and nothing else: presenting knobs there that pubmir silently
+// ignores would invite someone to "protect" a path in the copy that has no
+// say in the matter. Both fields are omitted when empty for that reason.
 type Config struct {
-	Role    Role     `yaml:"role"`
-	Exclude []string `yaml:"exclude"`
+	Role Role `yaml:"role"`
+	// Exclude paths are kept out of mirror entirely. Private side only.
+	Exclude []string `yaml:"exclude,omitempty"`
 	// Stub paths keep their name and location in mirror but never their
-	// content: mirror gets a fixed placeholder instead. Absent in older
-	// config files, where it simply means "no stubs".
-	Stub []string `yaml:"stub"`
+	// content: mirror gets a fixed placeholder instead. Private side only,
+	// and absent in older config files, where it means "no stubs".
+	Stub []string `yaml:"stub,omitempty"`
 }
 
 type Local struct {

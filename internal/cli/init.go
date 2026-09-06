@@ -47,7 +47,12 @@ func RunInit(args []string) error {
 	}
 
 	roleVal := config.Role(*role)
-	cfg := &config.Config{Role: roleVal, Exclude: config.DefaultExclude(), Stub: []string{}}
+	// exclude/stub govern what leaves private, so they belong only in
+	// private's config; a mirror's file records its role and nothing else.
+	cfg := &config.Config{Role: roleVal}
+	if roleVal == config.RolePrivate {
+		cfg.Exclude = config.DefaultExclude()
+	}
 	if err := cfg.Save(repo.Root); err != nil {
 		return err
 	}

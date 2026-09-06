@@ -120,7 +120,7 @@ pubmir check
 
 現在のリポジトリを pubmir 管理下に置きます。
 
-* `.pubmir.yml`（role と除外設定、Git 管理対象）を作成
+* `.pubmir.yml`（Git 管理対象）を作成 — private は `role` + 既定の `exclude`、mirror は `role` のみ
 * `.pubmir/local.yml`（pair のパス、gitignore 対象）を作成
 * `.gitignore` に pubmir 用のエントリを追記
 * private の場合は `.pubmir.env` のテンプレートを作成
@@ -249,13 +249,13 @@ pubmir が自動で push することはありません。remote が設定され
 
 | ファイル | 場所 | Git 管理 | 内容 |
 | --- | --- | --- | --- |
-| `.pubmir.yml` | 両方 | **される** | `role`（private / mirror）と `exclude` / `stub` パターン。可搬な設定のみ |
+| `.pubmir.yml` | 両方 | **される** | private 側は `role` + `exclude` / `stub`、mirror 側は `role` のみ（後述） |
 | `.pubmir/local.yml` | 両方 | されない | `pair`（対になるリポジトリのパス）。クローン場所に依存するため分離 |
 | `.pubmir.env` | private のみ | されない | `KEY=VALUE` 形式の秘密値。KEY が `<PUBMIR:KEY>` になる |
 | `.pubmir/state.json` | 両方 | されない | commit mapping と、ブランチごとの最終同期 sha |
 | `.pubmir/secrets-history.json` | private のみ | されない | pubmir が観測した秘密値の履歴（後述） |
 
-`.pubmir.yml` の例:
+private 側の `.pubmir.yml`:
 
 ```yaml
 role: private
@@ -266,6 +266,16 @@ exclude:
 stub:
   - "config/production.yml"
 ```
+
+mirror 側の `.pubmir.yml`:
+
+```yaml
+role: mirror
+```
+
+**`exclude` と `stub` は private 側専用の設定です。** 何を mirror へ出さないかを決めるルールなので、pubmir は private 側の値だけを参照します。mirror 側に書いても無視されるため、誤解を避けて `pubmir init --role mirror` は `role` だけを書き出します。
+
+`.pubmir.yml` は各リポジトリが自分のものを保持し続けます（sync でも rebuild でも相手側からは上書きされません）。private 側でルールを足しても mirror 側のファイルは変わりませんが、それが正常です。
 
 `.git`、`.pubmir/`、`.pubmir.env`、`.pubmir.secrets` は、ユーザー設定に関わらず常に強制除外されます。
 

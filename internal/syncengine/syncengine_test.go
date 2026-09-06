@@ -228,6 +228,59 @@ func headSha(t *testing.T, dir string) string {
 	return strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
 }
 
+// exclude/stub only ever govern what leaves private, so mirror's config must
+// not advertise settings pubmir would ignore there.
+func TestMirrorConfigCarriesRoleOnly(t *testing.T) {
+	p := setupPair(t)
+
+	mirrorCfg, err := os.ReadFile(filepath.Join(p.mirror, ".pubmir.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(mirrorCfg)); got != "role: mirror" {
+		t.Fatalf("mirror .pubmir.yml = %q, want only the role", got)
+	}
+
+	privateCfg, err := os.ReadFile(filepath.Join(p.private, ".pubmir.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(privateCfg), "role: private") ||
+		!strings.Contains(string(privateCfg), "exclude:") {
+		t.Fatalf("private .pubmir.yml should still carry role and exclude, got %q", privateCfg)
+	}
+
+	// A mirror config without those keys must still load and pair cleanly.
+	if _, err := pairing.Resolve(p.mirror); err != nil {
+		t.Fatalf("a role-only mirror config must resolve: %v", err)
+	}
+}
+
+// Rules configured on the private side keep working while mirror's config
+// stays untouched — the drift is expected, not a sign of a missed update.
+func TestPrivateRulesApplyWithoutTouchingMirrorConfig(t *testing.T) {
+	p := setupPair(t)
+	setStubPatterns(t, p.private, []string{"config/production.yml"})
+	setExcludePatterns(t, p.private, []string{"internal/**"})
+	writeFile(t, p.private, "config/production.yml", realConfig)
+	writeFile(t, p.private, "internal/secret.txt", "hidden\n")
+	commitAll(t, p.private, "add files")
+
+	if _, err := sync(t, p.private, false); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	if got, _ := os.ReadFile(filepath.Join(p.mirror, "config/production.yml")); string(got) != string(stub.Content) {
+		t.Fatalf("private's stub rule should apply, got %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(p.mirror, "internal/secret.txt")); !os.IsNotExist(err) {
+		t.Fatalf("private's exclude rule should apply (err=%v)", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(p.mirror, ".pubmir.yml")); strings.TrimSpace(string(got)) != "role: mirror" {
+		t.Fatalf("mirror config should stay role-only, got %q", got)
+	}
+}
+
 // --- happy path ---------------------------------------------------------
 
 func TestBootstrapAndRoundTrip(t *testing.T) {

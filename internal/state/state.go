@@ -11,7 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"pubmir/internal/config"
+	"github.com/desktopgame/pubmir/internal/config"
 )
 
 // Mapping records that a private commit and a mirror commit are the

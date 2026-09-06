@@ -12,13 +12,13 @@ import (
 	"slices"
 	"strings"
 
-	"pubmir/internal/config"
-	"pubmir/internal/gitrepo"
-	"pubmir/internal/leakcheck"
-	"pubmir/internal/pairing"
-	"pubmir/internal/secrets"
-	"pubmir/internal/state"
-	"pubmir/internal/tokenize"
+	"github.com/desktopgame/pubmir/internal/config"
+	"github.com/desktopgame/pubmir/internal/gitrepo"
+	"github.com/desktopgame/pubmir/internal/leakcheck"
+	"github.com/desktopgame/pubmir/internal/pairing"
+	"github.com/desktopgame/pubmir/internal/secrets"
+	"github.com/desktopgame/pubmir/internal/state"
+	"github.com/desktopgame/pubmir/internal/tokenize"
 )
 
 // BuiltCommit is one commit produced by a sync run.
@@ -121,13 +121,13 @@ func checkBranchMatch(privateSide, mirrorSide *pairing.Side) (string, error) {
 // preflightResult carries everything the direction-specific runners need
 // after preconditions have been verified.
 type preflightResult struct {
-	branchState              *state.BranchState
-	privateHead              string
-	privateHasHead           bool
-	mirrorHead               string
-	mirrorHasHead            bool
-	privateUnsyncedShas      []string
-	mirrorUnsyncedShas       []string
+	branchState         *state.BranchState
+	privateHead         string
+	privateHasHead      bool
+	mirrorHead          string
+	mirrorHasHead       bool
+	privateUnsyncedShas []string
+	mirrorUnsyncedShas  []string
 }
 
 // preflight enforces init.md §11 (divergence) and §13.1 points 6-7

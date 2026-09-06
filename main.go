@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"pubmir/internal/cli"
+	"github.com/desktopgame/pubmir/internal/cli"
 )
 
 func main() {

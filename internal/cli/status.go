@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"os"
 
-	"pubmir/internal/config"
-	"pubmir/internal/gitrepo"
-	"pubmir/internal/pairing"
-	"pubmir/internal/state"
+	"github.com/desktopgame/pubmir/internal/config"
+	"github.com/desktopgame/pubmir/internal/gitrepo"
+	"github.com/desktopgame/pubmir/internal/pairing"
+	"github.com/desktopgame/pubmir/internal/state"
 )
 
 func RunStatus(args []string) error {

@@ -15,7 +15,7 @@ import (
 	"sort"
 	"strings"
 
-	"pubmir/internal/config"
+	"github.com/desktopgame/pubmir/internal/config"
 )
 
 var keyPattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)

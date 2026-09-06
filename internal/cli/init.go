@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"pubmir/internal/config"
-	"pubmir/internal/gitrepo"
-	"pubmir/internal/secrets"
-	"pubmir/internal/skillasset"
-	"pubmir/internal/state"
+	"github.com/desktopgame/pubmir/internal/config"
+	"github.com/desktopgame/pubmir/internal/gitrepo"
+	"github.com/desktopgame/pubmir/internal/secrets"
+	"github.com/desktopgame/pubmir/internal/skillasset"
+	"github.com/desktopgame/pubmir/internal/state"
 )
 
 func RunInit(args []string) error {

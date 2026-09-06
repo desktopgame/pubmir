@@ -10,11 +10,11 @@ import (
 	"path/filepath"
 	"slices"
 
-	"pubmir/internal/config"
-	"pubmir/internal/gitrepo"
-	"pubmir/internal/pairing"
-	"pubmir/internal/secrets"
-	"pubmir/internal/tokenize"
+	"github.com/desktopgame/pubmir/internal/config"
+	"github.com/desktopgame/pubmir/internal/gitrepo"
+	"github.com/desktopgame/pubmir/internal/pairing"
+	"github.com/desktopgame/pubmir/internal/secrets"
+	"github.com/desktopgame/pubmir/internal/tokenize"
 )
 
 // Finding is one leak-check violation. Detail must never include the raw

@@ -1,4 +1,4 @@
-module pubmir
+module github.com/desktopgame/pubmir
 
 go 1.25.0
 

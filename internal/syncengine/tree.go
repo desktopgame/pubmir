@@ -3,7 +3,7 @@ package syncengine
 import (
 	"strings"
 
-	"pubmir/internal/gitrepo"
+	"github.com/desktopgame/pubmir/internal/gitrepo"
 )
 
 // emptyTreeSha is git's well-known empty-tree object id (present in every

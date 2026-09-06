@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pubmir/internal/config"
-	"pubmir/internal/pairing"
+	"github.com/desktopgame/pubmir/internal/config"
+	"github.com/desktopgame/pubmir/internal/pairing"
 )
 
 func runGit(t *testing.T, dir string, args ...string) {

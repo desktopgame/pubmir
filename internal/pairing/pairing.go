@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"pubmir/internal/config"
-	"pubmir/internal/gitrepo"
+	"github.com/desktopgame/pubmir/internal/config"
+	"github.com/desktopgame/pubmir/internal/gitrepo"
 )
 
 // Side is one repository (private or mirror) with its config loaded.

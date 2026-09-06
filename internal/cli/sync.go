@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"pubmir/internal/gitrepo"
-	"pubmir/internal/syncengine"
+	"github.com/desktopgame/pubmir/internal/gitrepo"
+	"github.com/desktopgame/pubmir/internal/syncengine"
 )
 
 func RunSync(args []string) error {

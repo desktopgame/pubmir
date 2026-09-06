@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"pubmir/internal/cli"
-	"pubmir/internal/leakcheck"
-	"pubmir/internal/pairing"
-	"pubmir/internal/secrets"
-	"pubmir/internal/syncengine"
+	"github.com/desktopgame/pubmir/internal/cli"
+	"github.com/desktopgame/pubmir/internal/leakcheck"
+	"github.com/desktopgame/pubmir/internal/pairing"
+	"github.com/desktopgame/pubmir/internal/secrets"
+	"github.com/desktopgame/pubmir/internal/syncengine"
 )
 
 // tempDir is like t.TempDir(), but tolerates Windows occasionally holding a

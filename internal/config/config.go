@@ -12,7 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"pubmir/internal/skillasset"
+	"github.com/desktopgame/pubmir/internal/skillasset"
 )
 
 type Role string
@@ -23,12 +23,12 @@ const (
 )
 
 const (
-	FileName      = ".pubmir.yml"
-	PubmirDirName = ".pubmir"
-	LocalFileName = "local.yml"
-	StateFileName = "state.json"
-	HistoryFile   = "secrets-history.json"
-	EnvFileName   = ".pubmir.env"
+	FileName       = ".pubmir.yml"
+	PubmirDirName  = ".pubmir"
+	LocalFileName  = "local.yml"
+	StateFileName  = "state.json"
+	HistoryFile    = "secrets-history.json"
+	EnvFileName    = ".pubmir.env"
 	AltSecretsFile = ".pubmir.secrets"
 )
 

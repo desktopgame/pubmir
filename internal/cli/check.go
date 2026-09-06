@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"pubmir/internal/config"
-	"pubmir/internal/leakcheck"
-	"pubmir/internal/pairing"
+	"github.com/desktopgame/pubmir/internal/config"
+	"github.com/desktopgame/pubmir/internal/leakcheck"
+	"github.com/desktopgame/pubmir/internal/pairing"
 )
 
 func RunCheck(args []string) error {

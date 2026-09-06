@@ -3,9 +3,9 @@ package syncengine
 import (
 	"fmt"
 
-	"pubmir/internal/gitrepo"
-	"pubmir/internal/state"
-	"pubmir/internal/tokenize"
+	"github.com/desktopgame/pubmir/internal/gitrepo"
+	"github.com/desktopgame/pubmir/internal/state"
+	"github.com/desktopgame/pubmir/internal/tokenize"
 )
 
 // buildPrivateToMirror replays each private commit in shas (oldest first,

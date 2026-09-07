@@ -73,6 +73,9 @@ func Run(cwd string, opts Options) (*Report, error) {
 	if err := checkNoRetiredSecrets(privateSide); err != nil {
 		return nil, err
 	}
+	if err := checkExampleTokensNotSecrets(privateSide); err != nil {
+		return nil, err
+	}
 
 	branch, err := checkBranchMatch(privateSide, mirrorSide)
 	if err != nil {
@@ -122,6 +125,21 @@ func checkNoRetiredSecrets(privateSide *pairing.Side) error {
 		return secrets.RetiredKeysError(privateSide.Root, retired)
 	}
 	return nil
+}
+
+// checkExampleTokensNotSecrets stops if .pubmir.yml's example_tokens names a
+// key that is also a real secret (current or retired). Whether a given
+// <PUBMIR:NAME> is a documentation example or real secret data would
+// otherwise depend on which list happens to be consulted first.
+func checkExampleTokensNotSecrets(privateSide *pairing.Side) error {
+	if len(privateSide.Config.ExampleTokens) == 0 {
+		return nil
+	}
+	current, history, err := secrets.LoadCurrentAndRecord(privateSide.Root)
+	if err != nil {
+		return err
+	}
+	return secrets.ValidateExampleTokens(current, history, privateSide.Config.ExampleTokens)
 }
 
 func checkBranchMatch(privateSide, mirrorSide *pairing.Side) (string, error) {
@@ -302,6 +320,7 @@ func runPrivateToMirror(privateSide, mirrorSide *pairing.Side, branch string, pr
 		currentSecrets:  current,
 		excludePatterns: excludePatterns,
 		stubPatterns:    privateSide.Config.Stub,
+		reservedTokens:  tokenize.ReservedSet(privateSide.Config.ExampleTokens),
 	}); err != nil {
 		return nil, err
 	}
@@ -327,6 +346,7 @@ type gatePolicy struct {
 	currentSecrets  map[string]string
 	excludePatterns []string
 	stubPatterns    []string
+	reservedTokens  map[string]bool
 }
 
 // gateBuiltCommits is the pre-ref-update safety gate: it re-reads every
@@ -337,7 +357,7 @@ type gatePolicy struct {
 // leaves mirror's refs and working tree completely untouched.
 func gateBuiltCommits(mirror *gitrepo.Repo, built []BuiltCommit, p gatePolicy) error {
 	for _, bc := range built {
-		for _, f := range leakcheck.ScanBytesForLeaks([]byte(bc.Message), p.mapper, p.currentSecrets) {
+		for _, f := range leakcheck.ScanBytesForLeaks([]byte(bc.Message), p.mapper, p.currentSecrets, p.reservedTokens) {
 			return fmt.Errorf("leak check failed on commit %s message: %s; mirror was not modified", bc.SourceSha, f.Detail)
 		}
 
@@ -372,7 +392,7 @@ func gateBuiltCommits(mirror *gitrepo.Repo, built []BuiltCommit, p gatePolicy) e
 				}
 				continue
 			}
-			for _, f := range leakcheck.ScanBytesForLeaks(content, p.mapper, p.currentSecrets) {
+			for _, f := range leakcheck.ScanBytesForLeaks(content, p.mapper, p.currentSecrets, p.reservedTokens) {
 				return fmt.Errorf("leak check failed on commit %s, path %q: %s; mirror was not modified", bc.SourceSha, e.Path, f.Detail)
 			}
 		}
@@ -411,7 +431,7 @@ func runMirrorToPrivate(privateSide, mirrorSide *pairing.Side, branch string, pr
 	}
 
 	built, err := buildMirrorToPrivate(mirrorSide.Repo, privateSide.Repo, pre.mirrorUnsyncedShas, current, pre.branchState,
-		carryForward, privateSide.Config.Stub, privateStubs)
+		carryForward, privateSide.Config.Stub, privateStubs, tokenize.ReservedSet(privateSide.Config.ExampleTokens))
 	if err != nil {
 		return nil, err
 	}

@@ -53,6 +53,9 @@ func Rebuild(cwd string, opts Options) (*RebuildReport, error) {
 	if err := checkNoRetiredSecrets(privateSide); err != nil {
 		return nil, err
 	}
+	if err := checkExampleTokensNotSecrets(privateSide); err != nil {
+		return nil, err
+	}
 	branch, err := checkBranchMatch(privateSide, mirrorSide)
 	if err != nil {
 		return nil, err
@@ -155,6 +158,7 @@ func Rebuild(cwd string, opts Options) (*RebuildReport, error) {
 		currentSecrets:  current,
 		excludePatterns: excludePatterns,
 		stubPatterns:    privateSide.Config.Stub,
+		reservedTokens:  tokenize.ReservedSet(privateSide.Config.ExampleTokens),
 	}); err != nil {
 		return nil, err
 	}

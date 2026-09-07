@@ -249,7 +249,7 @@ pubmir が自動で push することはありません。remote が設定され
 
 | ファイル | 場所 | Git 管理 | 内容 |
 | --- | --- | --- | --- |
-| `.pubmir.yml` | 両方 | **される** | private 側は `role` + `exclude` / `stub`、mirror 側は `role` のみ（後述） |
+| `.pubmir.yml` | 両方 | **される** | private 側は `role` + `exclude` / `stub` / `example_tokens`、mirror 側は `role` のみ（後述） |
 | `.pubmir/local.yml` | 両方 | されない | `pair`（対になるリポジトリのパス）。クローン場所に依存するため分離 |
 | `.pubmir.env` | private のみ | されない | `KEY=VALUE` 形式の秘密値。KEY が `<PUBMIR:KEY>` になる |
 | `.pubmir/state.json` | 両方 | されない | commit mapping と、ブランチごとの最終同期 sha |
@@ -265,6 +265,8 @@ exclude:
   - "**/*.pem"
 stub:
   - "config/production.yml"
+example_tokens:
+  - "KEY"
 ```
 
 mirror 側の `.pubmir.yml`:
@@ -273,7 +275,7 @@ mirror 側の `.pubmir.yml`:
 role: mirror
 ```
 
-**`exclude` と `stub` は private 側専用の設定です。** 何を mirror へ出さないかを決めるルールなので、pubmir は private 側の値だけを参照します。mirror 側に書いても無視されるため、誤解を避けて `pubmir init --role mirror` は `role` だけを書き出します。
+**`exclude` と `stub` と `example_tokens` は private 側専用の設定です。** 何を mirror へ出さないかを決めるルールなので、pubmir は private 側の値だけを参照します。mirror 側に書いても無視されるため、誤解を避けて `pubmir init --role mirror` は `role` だけを書き出します。
 
 `.pubmir.yml` は各リポジトリが自分のものを保持し続けます（sync でも rebuild でも相手側からは上書きされません）。private 側でルールを足しても mirror 側のファイルは変わりませんが、それが正常です。
 
@@ -322,6 +324,23 @@ Stub files are not writable through pubmir. Refusing to apply this change to the
 ```
 
 なお stub が隠すのは中身だけで、パスは mirror に公開されます。したがってパス文字列に秘密値が含まれる場合は、stub 対象であっても（従来どおり）sync を中断します。`config/203.0.113.42.yml` は「stub だから安全」とは扱いません。
+
+## `<PUBMIR:KEY>` をドキュメントの例として書きたいとき
+
+mirror で AI にドキュメントを書かせると、`<PUBMIR:KEY>` のようなトークン表記そのものを説明のために書くことがあります（例:「`<PUBMIR:KEY>` の実値を推測・復元しない」）。しかし pubmir にとって、これは**未定義の秘密キーを参照するトークン**と見分けがつきません。宣言せずに使うと:
+
+* `sync`（mirror → private）が `unknown pubmir token(s)` で止まる
+* `pubmir check` も同じ理由で失敗する
+
+`.pubmir.yml`（private 側）の `example_tokens` に名前を宣言すると、そのキー名のトークンは**どちらの方向でも文字列としてそのまま扱われます**（実値への復元も、未知トークンとしての警告もされません）。
+
+```yaml
+role: private
+example_tokens:
+  - "KEY"
+```
+
+宣言した名前が `.pubmir.env` の実際のキー（過去にローテーションした名前も含む）と重複している場合は、どちらの意味で使われているか pubmir には判断できないため、`sync` / `rebuild` を中断します。実際の秘密として使われそうな名前は避けてください。
 
 ## 秘密値のローテーションについて
 

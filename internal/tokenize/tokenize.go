@@ -83,30 +83,37 @@ func (m *Mapper) FindLeakingKey(s string) (token string, ok bool) {
 
 // Detokenize replaces every <PUBMIR:KEY> token in data with the current
 // value for KEY. It returns an error naming every KEY that has no current
-// value, without partially applying any substitution — the whole content is
-// rejected so no unresolved token or partial rewrite can ever reach
-// private.
-func Detokenize(data []byte, current map[string]string) ([]byte, error) {
-	unknown := UnknownTokens(data, current)
+// value and is not in reserved, without partially applying any substitution
+// — the whole content is rejected so no unresolved token or partial rewrite
+// can ever reach private.
+//
+// A token whose key is in reserved (see ReservedSet) is left exactly as
+// written instead of being resolved or reported as unknown: it names a
+// value declared in .pubmir.yml's example_tokens as a documentation
+// example, not a real secret, so there is nothing to restore it to.
+func Detokenize(data []byte, current map[string]string, reserved map[string]bool) ([]byte, error) {
+	unknown := UnknownTokens(data, current, reserved)
 	if len(unknown) > 0 {
 		return nil, fmt.Errorf("unknown pubmir token(s), not defined in .pubmir.env: %v", unknown)
 	}
 	return TokenPattern.ReplaceAllFunc(data, func(m []byte) []byte {
 		key := string(TokenPattern.FindSubmatch(m)[1])
+		if reserved[key] {
+			return m
+		}
 		return []byte(current[key])
 	}), nil
 }
 
 // UnknownTokens returns the sorted, de-duplicated list of KEYs referenced by
-// <PUBMIR:KEY> tokens in data that have no entry in current.
-func UnknownTokens(data []byte, current map[string]string) []string {
+// <PUBMIR:KEY> tokens in data that have no entry in current and are not
+// declared in reserved (see ReservedSet).
+func UnknownTokens(data []byte, current map[string]string, reserved map[string]bool) []string {
 	seen := map[string]bool{}
 	var unknown []string
 	for _, m := range TokenPattern.FindAllSubmatch(data, -1) {
 		key := string(m[1])
-		// Key is used example for document
-		// defined as always known token
-		if key == "KEY" {
+		if reserved[key] {
 			continue
 		}
 		if _, ok := current[key]; !ok && !seen[key] {
@@ -116,4 +123,19 @@ func UnknownTokens(data []byte, current map[string]string) []string {
 	}
 	sort.Strings(unknown)
 	return unknown
+}
+
+// ReservedSet builds a lookup set from a list of token names (typically
+// .pubmir.yml's example_tokens), for passing to UnknownTokens/Detokenize. A
+// nil/empty names reliably yields a nil map, which every lookup treats as
+// "nothing reserved".
+func ReservedSet(names []string) map[string]bool {
+	if len(names) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	return set
 }

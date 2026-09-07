@@ -25,6 +25,7 @@ func buildMirrorToPrivate(
 	carryForward []gitrepo.TreeEntry,
 	stubPatterns []string,
 	privateStubs []gitrepo.TreeEntry,
+	reserved map[string]bool,
 ) ([]BuiltCommit, error) {
 	parentOf := map[string]string{} // mirror sha -> private sha
 	for _, m := range bs.Mapping {
@@ -69,7 +70,7 @@ func buildMirrorToPrivate(
 			if err != nil {
 				return nil, err
 			}
-			restored, err := tokenize.Detokenize(content, currentSecrets)
+			restored, err := tokenize.Detokenize(content, currentSecrets, reserved)
 			if err != nil {
 				return nil, fmt.Errorf("commit %s, path %q: %w", sha, e.Path, err)
 			}
@@ -89,7 +90,7 @@ func buildMirrorToPrivate(
 			return nil, err
 		}
 
-		restoredMessageBytes, err := tokenize.Detokenize([]byte(commit.Message), currentSecrets)
+		restoredMessageBytes, err := tokenize.Detokenize([]byte(commit.Message), currentSecrets, reserved)
 		if err != nil {
 			return nil, fmt.Errorf("commit %s message: %w", sha, err)
 		}

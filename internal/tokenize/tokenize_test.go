@@ -42,7 +42,7 @@ func TestMapperIncludesHistoricalValues(t *testing.T) {
 
 func TestDetokenizeRestoresCurrentValue(t *testing.T) {
 	current := map[string]string{"IP": "203.0.113.99"}
-	out, err := Detokenize([]byte("ssh to "+Token("IP")), current)
+	out, err := Detokenize([]byte("ssh to "+Token("IP")), current, nil)
 	if err != nil {
 		t.Fatalf("Detokenize: %v", err)
 	}
@@ -53,9 +53,40 @@ func TestDetokenizeRestoresCurrentValue(t *testing.T) {
 
 func TestDetokenizeUnknownTokenErrors(t *testing.T) {
 	current := map[string]string{"IP": "203.0.113.99"}
-	_, err := Detokenize([]byte("ssh to "+Token("UNKNOWN")), current)
+	_, err := Detokenize([]byte("ssh to "+Token("UNKNOWN")), current, nil)
 	if err == nil {
 		t.Fatal("expected error for unknown token, got nil")
+	}
+}
+
+// A reserved token (declared via example_tokens for documentation, e.g. a
+// mirror-side "don't guess the value of <PUBMIR:KEY>") must survive
+// Detokenize completely unchanged. Reserved tokens have no current value,
+// so without this, current[key] on the undefined key silently rewrites the
+// token to an empty string instead of leaving the literal text alone.
+func TestDetokenizeLeavesReservedTokenVerbatim(t *testing.T) {
+	current := map[string]string{"IP": "203.0.113.99"}
+	reserved := ReservedSet([]string{"KEY"})
+
+	in := "do not guess the value of " + Token("KEY") + ", but " + Token("IP") + " is real"
+	out, err := Detokenize([]byte(in), current, reserved)
+	if err != nil {
+		t.Fatalf("Detokenize: %v", err)
+	}
+	want := "do not guess the value of " + Token("KEY") + ", but 203.0.113.99 is real"
+	if string(out) != want {
+		t.Fatalf("Detokenize with reserved token: got %q, want %q", out, want)
+	}
+}
+
+func TestUnknownTokensSkipsReserved(t *testing.T) {
+	current := map[string]string{"IP": "203.0.113.99"}
+	reserved := ReservedSet([]string{"KEY"})
+
+	data := []byte(Token("KEY") + " " + Token("REALLY_UNKNOWN"))
+	got := UnknownTokens(data, current, reserved)
+	if len(got) != 1 || got[0] != "REALLY_UNKNOWN" {
+		t.Fatalf("UnknownTokens = %v, want only REALLY_UNKNOWN (KEY is reserved)", got)
 	}
 }
 

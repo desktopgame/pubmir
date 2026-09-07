@@ -77,6 +77,15 @@ type Config struct {
 	// content: mirror gets a fixed placeholder instead. Private side only,
 	// and absent in older config files, where it means "no stubs".
 	Stub []string `yaml:"stub,omitempty"`
+	// ExampleTokens are <PUBMIR:KEY> names that a human has declared as
+	// documentation examples rather than real secrets (e.g. a mirror-side
+	// AI writing "don't guess the value of <PUBMIR:KEY>"). They are passed
+	// through unchanged in both directions and never required to resolve —
+	// without this, such a token blocks sync as an "unknown token" and, in
+	// mirror->private, would otherwise be silently replaced with an empty
+	// string (current[key] on an undefined key). Private side only, and
+	// absent in older config files, where it means "no example tokens".
+	ExampleTokens []string `yaml:"example_tokens,omitempty"`
 }
 
 type Local struct {

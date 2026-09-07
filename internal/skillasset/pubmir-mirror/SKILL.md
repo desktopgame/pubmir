@@ -108,6 +108,20 @@ If a task appears to require the real contents of a stubbed file, stop and expla
 
 ---
 
+## Writing about tokens yourself
+
+If a task calls for documentation that mentions the token syntax as an example — e.g. "don't guess the real value of `<PUBMIR:KEY>`" — do not just write it. An example token is indistinguishable from a real, unresolved one: syncing it back to private will fail (or, in older pubmir versions, silently corrupt the file).
+
+Before writing such a document:
+
+1. tell the human you want to use a placeholder name (e.g. `KEY`, `EXAMPLE`) as a documentation example
+2. ask them to add it to `example_tokens` in `.pubmir.yml` (private side)
+3. only then write the example
+
+Do not pick a name that could plausibly be a real secret's key.
+
+---
+
 ## Commands the AI may run
 
 The AI may run read-only pubmir commands when they help understand or validate the repository.

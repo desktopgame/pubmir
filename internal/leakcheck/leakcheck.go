@@ -32,20 +32,21 @@ func (f Finding) String() string {
 
 // ScanBytesForLeaks checks already-sanitized content for (a) a known secret
 // value that should have been tokenized but was not, and (b) a
-// <PUBMIR:KEY> token whose KEY is not a currently-known secret key.
-func ScanBytesForLeaks(content []byte, mapper *tokenize.Mapper, currentKeys map[string]string) []Finding {
-	return scanBytes(content, mapper, currentKeys, nil)
+// <PUBMIR:KEY> token whose KEY is neither a currently-known secret key nor
+// declared in reserved (see tokenize.ReservedSet) as a documentation example.
+func ScanBytesForLeaks(content []byte, mapper *tokenize.Mapper, currentKeys map[string]string, reserved map[string]bool) []Finding {
+	return scanBytes(content, mapper, currentKeys, nil, reserved)
 }
 
 // scanBytes is ScanBytesForLeaks with the option to stay quiet about tokens
 // whose key is already reported through a more specific finding, so the
 // output points at a cause instead of repeating its symptoms.
-func scanBytes(content []byte, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys map[string]bool) []Finding {
+func scanBytes(content []byte, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys, reserved map[string]bool) []Finding {
 	var findings []Finding
 	if key, ok := mapper.FindLeakingKey(string(content)); ok {
 		findings = append(findings, Finding{Category: "content-leak", Detail: fmt.Sprintf("content still contains a value that should have become %s", key)})
 	}
-	for _, k := range tokenize.UnknownTokens(content, currentKeys) {
+	for _, k := range tokenize.UnknownTokens(content, currentKeys, reserved) {
 		if explainedKeys[k] {
 			continue
 		}
@@ -85,6 +86,7 @@ func Check(mirror, private *pairing.Side) ([]Finding, error) {
 		return nil, fmt.Errorf("loading private secrets: %w", err)
 	}
 	mapper := tokenize.NewMapper(current, history.Values)
+	reserved := tokenize.ReservedSet(private.Config.ExampleTokens)
 
 	var findings []Finding
 
@@ -104,7 +106,7 @@ func Check(mirror, private *pairing.Side) ([]Finding, error) {
 	}
 
 	// 2/3/8: working tree content, path, and generic-pattern scan.
-	wtFindings, err := scanWorkingTree(mirror.Root, mapper, current, explained)
+	wtFindings, err := scanWorkingTree(mirror.Root, mapper, current, explained, reserved)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +126,7 @@ func Check(mirror, private *pairing.Side) ([]Finding, error) {
 	}
 
 	// 2/3: full history content and path scan.
-	histFindings, err := scanHistory(mirror.Repo, mapper, current, explained, reachableBlobs)
+	histFindings, err := scanHistory(mirror.Repo, mapper, current, explained, reachableBlobs, reserved)
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +283,7 @@ func normalizeEOL(b []byte) []byte {
 	return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))
 }
 
-func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys map[string]bool) ([]Finding, error) {
+func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys, reserved map[string]bool) ([]Finding, error) {
 	var findings []Finding
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -315,7 +317,7 @@ func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[strin
 		if err != nil {
 			return err
 		}
-		findings = append(findings, scanBytes(content, mapper, currentKeys, explainedKeys)...)
+		findings = append(findings, scanBytes(content, mapper, currentKeys, explainedKeys, reserved)...)
 		findings = append(findings, scanGenericPatterns(content, rel)...)
 		return nil
 	})
@@ -325,7 +327,7 @@ func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[strin
 	return findings, nil
 }
 
-func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys map[string]bool, blobs []string) ([]Finding, error) {
+func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys map[string]bool, blobs []string, reserved map[string]bool) ([]Finding, error) {
 	var findings []Finding
 
 	bookkeepingBlobs, err := bookkeepingBlobShas(repo)
@@ -354,7 +356,7 @@ func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[st
 		if err != nil {
 			return nil, err
 		}
-		for _, f := range scanBytes(content, mapper, currentKeys, explainedKeys) {
+		for _, f := range scanBytes(content, mapper, currentKeys, explainedKeys, reserved) {
 			findings = append(findings, Finding{Category: f.Category, Detail: fmt.Sprintf("blob %s: %s", sha, f.Detail)})
 		}
 	}

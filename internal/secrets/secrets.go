@@ -191,6 +191,24 @@ func RetiredKeysError(repoRoot string, keys []string) error {
 		strings.Join(keys, ", "), config.EnvFileName, historyPath(repoRoot), config.HistoryFile, config.EnvFileName)
 }
 
+// ValidateExampleTokens rejects any name in exampleTokens (from
+// .pubmir.yml's example_tokens) that is also a real secret key — currently
+// defined, or only remembered in history from before a rotation. Letting
+// such a name through would be ambiguous in exactly the way that matters:
+// whether a given <PUBMIR:NAME> is real secret data or a documentation
+// example depends on which list you trust.
+func ValidateExampleTokens(current map[string]string, h *History, exampleTokens []string) error {
+	for _, name := range exampleTokens {
+		if _, ok := current[name]; ok {
+			return fmt.Errorf("%s is declared as an example_token in .pubmir.yml but is also a real key in %s; rename one of them", name, config.EnvFileName)
+		}
+		if _, ok := h.Values[name]; ok {
+			return fmt.Errorf("%s is declared as an example_token in .pubmir.yml but also appears in %s (a past secret value); rename one of them", name, config.HistoryFile)
+		}
+	}
+	return nil
+}
+
 // LoadCurrentAndRecord loads .pubmir.env and records its values into the
 // local secrets history, saving the history if it changed. This is the
 // single place .pubmir.env should be read from so history-tracking happens

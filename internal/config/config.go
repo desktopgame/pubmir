@@ -60,7 +60,7 @@ var ForcedExcludes = []string{
 // must also be exempt from leak/token-validity scanning — the bundled
 // skill's documentation text legitimately contains example tokens like
 // <PUBMIR:KEY> that do not correspond to any real configured secret.
-var BookkeepingPaths = []string{FileName, GitignoreFileName, skillasset.PubmirMirrorSkillRelPath}
+var BookkeepingPaths = append([]string{FileName, GitignoreFileName}, skillasset.SkillRelPaths...)
 
 // Config is the git-tracked half of a repository's pubmir configuration.
 //

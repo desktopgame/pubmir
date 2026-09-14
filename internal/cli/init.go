@@ -67,19 +67,17 @@ func RunInit(args []string) error {
 	}
 
 	addPaths := []string{config.FileName, config.GitignoreFileName}
-	skillInstalled := false
+	var installedSkills []string
 	if roleVal == config.RoleMirror {
-		skillInstalled, err = installMirrorSkill(repo.Root)
+		installedSkills, err = installMirrorSkills(repo.Root)
 		if err != nil {
 			return err
 		}
-		if skillInstalled {
-			addPaths = append(addPaths, skillasset.PubmirMirrorSkillRelPath)
-		}
+		addPaths = append(addPaths, installedSkills...)
 	}
 
 	// pubmir's own tracked scaffolding (.pubmir.yml, .gitignore, and on the
-	// mirror side the bundled Claude Code skill) must be committed here so
+	// mirror side the bundled AI agent skills) must be committed here so
 	// the working tree starts clean — sync refuses to run against a dirty
 	// mirror/private working tree, and would otherwise reject the very
 	// first sync right after init.
@@ -112,31 +110,36 @@ func RunInit(args []string) error {
 	if roleVal == config.RolePrivate {
 		fmt.Printf("Edit %s to add secret values, then run `pubmir sync`.\n", filepath.Join(repo.Root, config.EnvFileName))
 	}
-	if skillInstalled {
-		fmt.Printf("Installed Claude Code skill: %s\n", skillasset.PubmirMirrorSkillRelPath)
+	if len(installedSkills) > 0 {
+		for _, p := range installedSkills {
+			fmt.Printf("Installed AI agent skill: %s\n", p)
+		}
 	}
 	return nil
 }
 
-// installMirrorSkill writes pubmir's bundled Claude Code skill into the
-// mirror repository so it ships to collaborators (and AI agents) on
-// `git clone`, per Claude Code's project-skill convention. It never
-// overwrites an existing file — if one is already there (e.g. the human
-// customized it), it is left untouched.
-func installMirrorSkill(root string) (installed bool, err error) {
-	path := filepath.Join(root, filepath.FromSlash(skillasset.PubmirMirrorSkillRelPath))
-	if _, err := os.Stat(path); err == nil {
-		return false, nil
-	} else if !os.IsNotExist(err) {
-		return false, err
+// installMirrorSkills writes pubmir's bundled skill into the mirror
+// repository at every supported agent tool's project-skill location, so it
+// ships to collaborators (and AI agents) on `git clone`, per each tool's
+// convention. It never overwrites an existing file — if one is already there
+// (e.g. the human customized it), it is left untouched and not reported.
+func installMirrorSkills(root string) (installed []string, err error) {
+	for _, rel := range skillasset.SkillRelPaths {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if _, err := os.Stat(path); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(path, skillasset.PubmirMirrorSkillMD, 0o644); err != nil {
+			return nil, err
+		}
+		installed = append(installed, rel)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return false, err
-	}
-	if err := os.WriteFile(path, skillasset.PubmirMirrorSkillMD, 0o644); err != nil {
-		return false, err
-	}
-	return true, nil
+	return installed, nil
 }
 
 // ensureGitignore appends any missing pubmir-managed entries to .gitignore

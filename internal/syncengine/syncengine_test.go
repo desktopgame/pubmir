@@ -15,6 +15,7 @@ import (
 	"github.com/desktopgame/pubmir/internal/leakcheck"
 	"github.com/desktopgame/pubmir/internal/pairing"
 	"github.com/desktopgame/pubmir/internal/secrets"
+	"github.com/desktopgame/pubmir/internal/skillasset"
 	"github.com/desktopgame/pubmir/internal/stub"
 	"github.com/desktopgame/pubmir/internal/syncengine"
 )
@@ -321,9 +322,12 @@ func TestBootstrapAndRoundTrip(t *testing.T) {
 	}
 
 	// The bundled skill installed by `pubmir init` must survive the sync's
-	// wholesale tree replacement (same carry-forward hazard as .pubmir.yml).
-	if _, err := os.Stat(filepath.Join(p.mirror, ".claude/skills/pubmir-mirror/SKILL.md")); err != nil {
-		t.Fatalf("skill file did not survive private->mirror sync: %v", err)
+	// wholesale tree replacement (same carry-forward hazard as .pubmir.yml),
+	// at every agent tool's install location.
+	for _, rel := range skillasset.SkillRelPaths {
+		if _, err := os.Stat(filepath.Join(p.mirror, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("skill file %s did not survive private->mirror sync: %v", rel, err)
+		}
 	}
 
 	clean := runGit(t, p.mirror, "status", "--porcelain")

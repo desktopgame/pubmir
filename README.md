@@ -124,7 +124,7 @@ pubmir check
 * `.pubmir/local.yml`（pair のパス、gitignore 対象）を作成
 * `.gitignore` に pubmir 用のエントリを追記
 * private の場合は `.pubmir.env` のテンプレートを作成
-* mirror の場合は同梱の Claude Code skill を配置（後述）
+* mirror の場合は同梱の AI エージェント skill を配置（後述）
 * 上記のうち Git 管理対象のファイルを 1 つのコミットにまとめる
 
 既に初期化済みの場合は、既存ファイルを上書きせずに停止します。
@@ -365,15 +365,16 @@ If they were removed by mistake: restore them to .pubmir.env.
 
 本当に秘密でなくなった場合は、`.pubmir/secrets-history.json` から該当キーの項目を削除し（ローカル専用ファイルなので手で編集して構いません）、`pubmir rebuild` を実行してください。過去の履歴も含めてトークンが実値へ戻ります。
 
-## Claude Code skill の同梱
+## AI エージェント skill の同梱
 
-`pubmir init --role mirror` を実行すると、mirror リポジトリに Claude Code 用の skill が配置されます。
+`pubmir init --role mirror` を実行すると、mirror リポジトリに AI エージェント用の skill が配置されます。対応ツールごとの project-skill 規約に合わせて両方に書き出します。
 
 ```text
 .claude/skills/pubmir-mirror/SKILL.md
+.opencode/skills/pubmir-mirror/SKILL.md
 ```
 
-このファイルはバイナリに埋め込まれており（`go:embed`）、初期化時のコミットに含まれるため、`git clone` した時点で共同作業者や AI エージェントに自動的に共有されます。既にファイルが存在する場合は上書きしません。
+これらのファイルはバイナリに埋め込まれており（`go:embed`）、初期化時のコミットに含まれるため、`git clone` した時点で共同作業者や AI エージェントに自動的に共有されます。既にファイルが存在する場合は上書きしません。
 
 skill の内容は、AI に対して次のことを伝えます。
 

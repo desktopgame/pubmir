@@ -27,7 +27,7 @@ func RunCheck(args []string) error {
 		privateSide, mirrorSide = pair.Other, pair.Self
 	}
 
-	findings, err := leakcheck.Check(mirrorSide, privateSide)
+	findings, err := leakcheck.Check(mirrorSide, privateSide, os.Stdout)
 	if err != nil {
 		return err
 	}

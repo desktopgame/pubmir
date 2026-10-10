@@ -6,6 +6,7 @@ package leakcheck
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -80,7 +81,10 @@ func scanGenericPatterns(content []byte, path string) []Finding {
 // Check runs the full `pubmir check` suite against mirror, using private's
 // secret values (current + history) as the ground truth for what must never
 // appear in mirror.
-func Check(mirror, private *pairing.Side) ([]Finding, error) {
+// Progress is optional; callers that omit it stay silent.
+func Check(mirror, private *pairing.Side, progress ...io.Writer) ([]Finding, error) {
+	out := progressWriter(progress)
+	fmt.Fprintln(out, "Check: loading secret rules...")
 	current, history, err := secrets.LoadCurrentAndRecord(private.Root)
 	if err != nil {
 		return nil, fmt.Errorf("loading private secrets: %w", err)
@@ -106,7 +110,8 @@ func Check(mirror, private *pairing.Side) ([]Finding, error) {
 	}
 
 	// 2/3/8: working tree content, path, and generic-pattern scan.
-	wtFindings, err := scanWorkingTree(mirror.Root, mapper, current, explained, reserved)
+	fmt.Fprintln(out, "Check: checking working tree...")
+	wtFindings, err := scanWorkingTree(mirror.Root, mapper, current, explained, reserved, out)
 	if err != nil {
 		return nil, err
 	}
@@ -116,6 +121,7 @@ func Check(mirror, private *pairing.Side) ([]Finding, error) {
 	// would carry. Objects outside this set (old blobs kept alive by the
 	// reflog after a rebuild, say) stay on this machine and are deliberately
 	// not treated as published.
+	fmt.Fprintln(out, "Check: enumerating reachable history objects...")
 	reachableBlobs, err := mirror.Repo.RevListAllBlobs()
 	if err != nil {
 		return nil, err
@@ -126,13 +132,14 @@ func Check(mirror, private *pairing.Side) ([]Finding, error) {
 	}
 
 	// 2/3: full history content and path scan.
-	histFindings, err := scanHistory(mirror.Repo, mapper, current, explained, reachableBlobs, reserved)
+	histFindings, err := scanHistory(mirror.Repo, mapper, current, explained, reachableBlobs, reserved, out)
 	if err != nil {
 		return nil, err
 	}
 	findings = append(findings, histFindings...)
 
 	// 4: private's exclude patterns must not match anything present in mirror.
+	fmt.Fprintln(out, "Check: checking excluded files...")
 	excFindings, err := checkNoExcludedFiles(mirror.Root, private.Config.Exclude)
 	if err != nil {
 		return nil, err
@@ -140,6 +147,7 @@ func Check(mirror, private *pairing.Side) ([]Finding, error) {
 	findings = append(findings, excFindings...)
 
 	// 5: secrets files must never exist in mirror, at any depth.
+	fmt.Fprintln(out, "Check: checking forbidden secret files...")
 	secFindings, err := checkNoSecretsFiles(mirror.Root)
 	if err != nil {
 		return nil, err
@@ -147,6 +155,7 @@ func Check(mirror, private *pairing.Side) ([]Finding, error) {
 	findings = append(findings, secFindings...)
 
 	// 6: no nested/foreign ".git" path other than mirror's own top-level one.
+	fmt.Fprintln(out, "Check: checking nested Git directories...")
 	gitFindings, err := checkNoForeignGitDir(mirror.Root)
 	if err != nil {
 		return nil, err
@@ -155,6 +164,7 @@ func Check(mirror, private *pairing.Side) ([]Finding, error) {
 
 	// 7: every stubbed path must still hold exactly the placeholder, and
 	// private's real blob for it must never have reached mirror's odb.
+	fmt.Fprintln(out, "Check: checking stubs...")
 	stubFindings, err := checkStubs(mirror, private, reachable)
 	if err != nil {
 		return nil, err
@@ -283,7 +293,9 @@ func normalizeEOL(b []byte) []byte {
 	return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))
 }
 
-func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys, reserved map[string]bool) ([]Finding, error) {
+func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys, reserved map[string]bool, progress ...io.Writer) ([]Finding, error) {
+	out := progressWriter(progress)
+	checked := 0
 	var findings []Finding
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -319,6 +331,8 @@ func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[strin
 		}
 		findings = append(findings, scanBytes(content, mapper, currentKeys, explainedKeys, reserved)...)
 		findings = append(findings, scanGenericPatterns(content, rel)...)
+		checked++
+		fmt.Fprintf(out, "Check: checked %d working-tree files\n", checked)
 		return nil
 	})
 	if err != nil {
@@ -327,7 +341,10 @@ func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[strin
 	return findings, nil
 }
 
-func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys map[string]bool, blobs []string, reserved map[string]bool) ([]Finding, error) {
+func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys map[string]bool, blobs []string, reserved map[string]bool, progress ...io.Writer) ([]Finding, error) {
+	out := progressWriter(progress)
+	fmt.Fprintln(out, "Check: checking history paths...")
+	checkedTrees := 0
 	var findings []Finding
 
 	// Collect paths and bookkeeping IDs together, newest trees first. This
@@ -347,6 +364,8 @@ func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[st
 				}
 			}
 		}
+		checkedTrees++
+		fmt.Fprintf(out, "Check: checked %d history snapshots\n", checkedTrees)
 		return nil
 	})
 	if err != nil {
@@ -359,16 +378,27 @@ func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[st
 			toScan = append(toScan, sha)
 		}
 	}
+	fmt.Fprintf(out, "Check: checking %d history blobs...\n", len(toScan))
+	checkedBlobs := 0
 	err = repo.VisitBlobs(toScan, func(sha string, content []byte) error {
 		for _, f := range scanBytes(content, mapper, currentKeys, explainedKeys, reserved) {
 			findings = append(findings, Finding{Category: f.Category, Detail: fmt.Sprintf("blob %s: %s", sha, f.Detail)})
 		}
+		checkedBlobs++
+		fmt.Fprintf(out, "Check: checked %d/%d history blobs\n", checkedBlobs, len(toScan))
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	return findings, nil
+}
+
+func progressWriter(writers []io.Writer) io.Writer {
+	if len(writers) > 0 && writers[0] != nil {
+		return writers[0]
+	}
+	return io.Discard
 }
 
 // checkNoExcludedFiles flags files matching private's user-defined exclude

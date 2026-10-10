@@ -38,6 +38,7 @@ func Rebuild(cwd string, opts Options) (*RebuildReport, error) {
 		opts.Stdout = os.Stdout
 	}
 
+	fmt.Fprintln(opts.Stdout, "Rebuild: checking repositories and history...")
 	pair, err := pairing.Resolve(cwd)
 	if err != nil {
 		return nil, err
@@ -144,8 +145,14 @@ func Rebuild(cwd string, opts Options) (*RebuildReport, error) {
 	// may be resolved through the old, now-obsolete correspondence.
 	rebuiltState := &state.BranchState{}
 
+	progress := func(stage string) func(int, int) {
+		return func(done, total int) {
+			fmt.Fprintf(opts.Stdout, "Rebuild: %s %d/%d commits\n", stage, done, total)
+		}
+	}
+	fmt.Fprintf(opts.Stdout, "Rebuild: rebuilding %d commits...\n", len(allShas))
 	built, err := buildPrivateToMirror(privateSide.Repo, mirrorSide.Repo, allShas, excludePatterns,
-		privateSide.Config.Stub, mapper, rebuiltState, carryForward)
+		privateSide.Config.Stub, mapper, rebuiltState, carryForward, progress("rebuilt"))
 	if err != nil {
 		return nil, err
 	}
@@ -153,13 +160,14 @@ func Rebuild(cwd string, opts Options) (*RebuildReport, error) {
 		return nil, fmt.Errorf("private branch %q produced no commits to rebuild", branch)
 	}
 
+	fmt.Fprintln(opts.Stdout, "Rebuild: checking rebuilt history for leaks...")
 	if err := gateBuiltCommits(mirrorSide.Repo, built, gatePolicy{
 		mapper:          mapper,
 		currentSecrets:  current,
 		excludePatterns: excludePatterns,
 		stubPatterns:    privateSide.Config.Stub,
 		reservedTokens:  tokenize.ReservedSet(privateSide.Config.ExampleTokens),
-	}); err != nil {
+	}, progress("checked")); err != nil {
 		return nil, err
 	}
 
@@ -167,6 +175,7 @@ func Rebuild(cwd string, opts Options) (*RebuildReport, error) {
 		rebuiltState.Record(bc.SourceSha, bc.TargetSha)
 	}
 
+	fmt.Fprintln(opts.Stdout, "Rebuild: updating mirror and saving sync state...")
 	newTip := built[len(built)-1].TargetSha
 	if err := finalizeSync(mirrorSide.Repo, "mirror", "refs/heads/"+branch, mirrorHead, mirrorHasHead, newTip,
 		privateSide.Root, mirrorSide.Root, branch, rebuiltState); err != nil {

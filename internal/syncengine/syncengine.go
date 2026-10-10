@@ -355,8 +355,9 @@ type gatePolicy struct {
 // excluded path, and stubs holding exactly the placeholder. The objects
 // exist only as unreferenced loose objects at this point, so failing here
 // leaves mirror's refs and working tree completely untouched.
-func gateBuiltCommits(mirror *gitrepo.Repo, built []BuiltCommit, p gatePolicy) error {
-	for _, bc := range built {
+func gateBuiltCommits(mirror *gitrepo.Repo, built []BuiltCommit, p gatePolicy, progress ...func(int, int)) error {
+	checked := map[string]bool{}
+	for i, bc := range built {
 		for _, f := range leakcheck.ScanBytesForLeaks([]byte(bc.Message), p.mapper, p.currentSecrets, p.reservedTokens) {
 			return fmt.Errorf("leak check failed on commit %s message: %s; mirror was not modified", bc.SourceSha, f.Detail)
 		}
@@ -382,6 +383,11 @@ func gateBuiltCommits(mirror *gitrepo.Repo, built []BuiltCommit, p gatePolicy) e
 				return fmt.Errorf("leak check failed on commit %s: path %q matches an exclude pattern but was built into the mirror tree; mirror was not modified", bc.SourceSha, e.Path)
 			}
 
+			// Check paths every time; cache content checks by blob and policy.
+			key := e.Sha + fmt.Sprint(tokenize.MatchesAny(e.Path, p.stubPatterns))
+			if checked[key] {
+				continue
+			}
 			content, err := mirror.CatFileBlob(e.Sha)
 			if err != nil {
 				return err
@@ -390,11 +396,16 @@ func gateBuiltCommits(mirror *gitrepo.Repo, built []BuiltCommit, p gatePolicy) e
 				if !bytes.Equal(content, stub.Content) {
 					return fmt.Errorf("leak check failed on commit %s: stubbed path %q does not hold the placeholder; mirror was not modified", bc.SourceSha, e.Path)
 				}
+				checked[key] = true
 				continue
 			}
 			for _, f := range leakcheck.ScanBytesForLeaks(content, p.mapper, p.currentSecrets, p.reservedTokens) {
 				return fmt.Errorf("leak check failed on commit %s, path %q: %s; mirror was not modified", bc.SourceSha, e.Path, f.Detail)
 			}
+			checked[key] = true
+		}
+		for _, notify := range progress {
+			notify(i+1, len(built))
 		}
 	}
 	return nil

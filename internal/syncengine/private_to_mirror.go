@@ -22,14 +22,17 @@ func buildPrivateToMirror(
 	mapper *tokenize.Mapper,
 	bs *state.BranchState,
 	carryForward []gitrepo.TreeEntry,
+	progress ...func(int, int),
 ) ([]BuiltCommit, error) {
 	parentOf := map[string]string{} // private sha -> mirror sha
 	for _, m := range bs.Mapping {
 		parentOf[m.Private] = m.Mirror
 	}
 
+	// Object IDs are cached only for this run and its fixed policy.
+	blobs := map[string]string{}
 	var built []BuiltCommit
-	for _, sha := range shas {
+	for i, sha := range shas {
 		commit, err := private.CommitInfo(sha)
 		if err != nil {
 			return nil, err
@@ -69,14 +72,17 @@ func buildPrivateToMirror(
 				continue
 			}
 
-			content, err := private.CatFileBlob(e.Sha)
-			if err != nil {
-				return nil, err
-			}
-			sanitized := mapper.Tokenize(content)
-			newBlobSha, err := mirror.HashObjectWrite(sanitized)
-			if err != nil {
-				return nil, err
+			newBlobSha, ok := blobs[e.Sha]
+			if !ok {
+				content, err := private.CatFileBlob(e.Sha)
+				if err != nil {
+					return nil, err
+				}
+				newBlobSha, err = mirror.HashObjectWrite(mapper.Tokenize(content))
+				if err != nil {
+					return nil, err
+				}
+				blobs[e.Sha] = newBlobSha
 			}
 			mirrorEntries = append(mirrorEntries, gitrepo.TreeEntry{
 				Mode: e.Mode, Type: e.Type, Sha: newBlobSha, Path: e.Path,
@@ -106,6 +112,9 @@ func buildPrivateToMirror(
 
 		parentOf[sha] = mirrorSha
 		built = append(built, BuiltCommit{SourceSha: sha, TargetSha: mirrorSha, Message: firstLine(sanitizedMessage)})
+		for _, notify := range progress {
+			notify(i+1, len(shas))
+		}
 	}
 	return built, nil
 }

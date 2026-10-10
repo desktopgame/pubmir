@@ -1,6 +1,8 @@
 package syncengine_test
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -348,5 +350,35 @@ func TestRebuildCancelledLeavesMirrorUntouched(t *testing.T) {
 	}
 	if after := headSha(t, p.mirror); after != before {
 		t.Fatalf("mirror changed despite cancellation: %s -> %s", before, after)
+	}
+}
+
+func TestRebuildProgress(t *testing.T) {
+	p := setupPair(t)
+	writeFile(t, p.private, "unchanged.txt", "same content\n")
+	commitAll(t, p.private, "A")
+	writeFile(t, p.private, "other.txt", "new content\n")
+	commitAll(t, p.private, "B")
+	var out bytes.Buffer
+	report, err := syncengine.Rebuild(p.private, syncengine.Options{Yes: true, Stdout: &out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := len(report.Rebuilt)
+	for _, stage := range []string{"rebuilt", "checked"} {
+		for i := 1; i <= total; i++ {
+			want := fmt.Sprintf("Rebuild: %s %d/%d commits", stage, i, total)
+			if !strings.Contains(out.String(), want) {
+				t.Fatalf("missing %q in %s", want, out.String())
+			}
+		}
+	}
+	for _, stage := range []string{"checking repositories and history", "checking rebuilt history for leaks", "updating mirror and saving sync state"} {
+		if !strings.Contains(out.String(), stage) {
+			t.Fatalf("missing stage %q", stage)
+		}
+	}
+	if got, err := os.ReadFile(filepath.Join(p.mirror, "unchanged.txt")); err != nil || string(got) != "same content\n" {
+		t.Fatalf("unchanged blob: %q, %v", got, err)
 	}
 }

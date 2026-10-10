@@ -330,61 +330,45 @@ func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[strin
 func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys map[string]bool, blobs []string, reserved map[string]bool) ([]Finding, error) {
 	var findings []Finding
 
-	bookkeepingBlobs, err := bookkeepingBlobShas(repo)
+	// Collect paths and bookkeeping IDs together, newest trees first. This
+	// replaces a separate Git lookup per bookkeeping path per commit.
+	bookkeepingBlobs := map[string]bool{}
+	seenPaths := map[string]bool{}
+	err := repo.VisitHistoryTrees(func(entries []gitrepo.TreeEntry) error {
+		for _, e := range entries {
+			if slices.Contains(config.BookkeepingPaths, e.Path) {
+				bookkeepingBlobs[e.Sha] = true
+				continue
+			}
+			if !seenPaths[e.Path] {
+				seenPaths[e.Path] = true
+				if f := ScanPathForLeak(e.Path, mapper); f != nil {
+					findings = append(findings, *f)
+				}
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	paths, err := repo.AllTrackedPathsAllCommits()
-	if err != nil {
-		return nil, err
-	}
-	for _, p := range paths {
-		if slices.Contains(config.BookkeepingPaths, p) {
-			continue
-		}
-		if f := ScanPathForLeak(p, mapper); f != nil {
-			findings = append(findings, *f)
-		}
-	}
-
+	var toScan []string
 	for _, sha := range blobs {
-		if bookkeepingBlobs[sha] {
-			continue
+		if !bookkeepingBlobs[sha] {
+			toScan = append(toScan, sha)
 		}
-		content, err := repo.CatFileBlob(sha)
-		if err != nil {
-			return nil, err
-		}
+	}
+	err = repo.VisitBlobs(toScan, func(sha string, content []byte) error {
 		for _, f := range scanBytes(content, mapper, currentKeys, explainedKeys, reserved) {
 			findings = append(findings, Finding{Category: f.Category, Detail: fmt.Sprintf("blob %s: %s", sha, f.Detail)})
 		}
-	}
-	return findings, nil
-}
-
-// bookkeepingBlobShas collects every blob sha that config.BookkeepingPaths
-// has ever resolved to, across every commit reachable from any ref, so
-// scanHistory can exempt pubmir's own bookkeeping content (which is not
-// data that passed through tokenize/detokenize) from the content scan.
-func bookkeepingBlobShas(repo *gitrepo.Repo) (map[string]bool, error) {
-	commits, err := repo.RevList("--all")
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	shas := map[string]bool{}
-	for _, c := range commits {
-		for _, p := range config.BookkeepingPaths {
-			e, ok, err := repo.LookupPath(c, p)
-			if err != nil {
-				return nil, err
-			}
-			if ok {
-				shas[e.Sha] = true
-			}
-		}
-	}
-	return shas, nil
+	return findings, nil
 }
 
 // checkNoExcludedFiles flags files matching private's user-defined exclude

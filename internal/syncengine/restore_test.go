@@ -3,6 +3,7 @@ package syncengine_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -16,6 +17,10 @@ import (
 
 func restoreFixture(t *testing.T) (original pair, mirror, target, env string) {
 	t.Helper()
+	originalCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	original = setupPair(t)
 	setSecrets(t, original.private, map[string]string{"IP": "203.0.113.42"})
 	setStubPatterns(t, original.private, []string{"cert.cer"})
@@ -26,8 +31,17 @@ func restoreFixture(t *testing.T) (original pair, mirror, target, env string) {
 		t.Fatal(err)
 	}
 	root := tempDir(t)
+	// Cleanups run in reverse order. Leave both temporary repositories
+	// before removing their directories; Windows cannot remove the cwd.
+	t.Cleanup(func() {
+		if err := os.Chdir(originalCwd); err != nil {
+			t.Errorf("restore cwd: %v", err)
+		}
+	})
 	mirror, target, env = filepath.Join(root, "mirror"), filepath.Join(root, "private"), filepath.Join(root, "new.env")
-	runGit(t, root, "clone", "-q", original.mirror, mirror)
+	// Set this before checkout, not afterward: changing it after a CRLF
+	// checkout makes the clone dirty and can commit CRLF into stub blobs.
+	runGit(t, root, "-c", "core.autocrlf=false", "clone", "-q", original.mirror, mirror)
 	runGit(t, mirror, "config", "user.name", "Test")
 	runGit(t, mirror, "config", "user.email", "test@example.invalid")
 	runGit(t, mirror, "config", "core.autocrlf", "false")
@@ -36,6 +50,18 @@ func restoreFixture(t *testing.T) (original pair, mirror, target, env string) {
 }
 
 func TestRestoreHistoryAndBidirectionalSync(t *testing.T) {
+	for _, autocrlf := range []string{"false", "true"} {
+		t.Run("autocrlf="+autocrlf, func(t *testing.T) {
+			root := tempDir(t)
+			writeFile(t, root, "gitconfig", "[core]\n\tautocrlf = "+autocrlf+"\n")
+			t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(root, "gitconfig"))
+			testRestoreHistoryAndBidirectionalSync(t)
+		})
+	}
+}
+
+func testRestoreHistoryAndBidirectionalSync(t *testing.T) {
+	t.Helper()
 	original, mirror, target, env := restoreFixture(t)
 	head := runGit(t, mirror, "rev-parse", "HEAD")
 	objects := runGit(t, mirror, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)")
@@ -119,6 +145,9 @@ func TestRestoreHistoryAndBidirectionalSync(t *testing.T) {
 func TestRestoreRefusesUnsafeInputsWithoutPublishing(t *testing.T) {
 	for _, scenario := range []string{"missing-token", "missing-file", "historical-token", "empty-value", "duplicate-value", "secrets-in-mirror", "existing-target", "nested-target", "already-paired", "dirty", "merge", "token-path", "bad-config"} {
 		t.Run(scenario, func(t *testing.T) {
+			if scenario == "token-path" && runtime.GOOS == "windows" {
+				t.Skip("pubmir token syntax contains characters forbidden in Windows filenames")
+			}
 			original, mirror, target, env := restoreFixture(t)
 			cfg := ""
 			switch scenario {

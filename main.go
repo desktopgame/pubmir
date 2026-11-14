@@ -28,6 +28,8 @@ func main() {
 		err = cli.RunCheck(os.Args[2:])
 	case "rebuild":
 		err = cli.RunRebuild(os.Args[2:])
+	case "restore":
+		err = cli.RunRestore(os.Args[2:])
 	case "-h", "--help", "help":
 		printUsage()
 		return
@@ -48,6 +50,7 @@ func printUsage() {
 
 Usage:
   pubmir init --role <private|mirror> --pair <path>
+  pubmir restore --to <new-private-path> --secrets <env-file> [--config <private-yml>]
   pubmir sync [--yes]
   pubmir status
   pubmir check

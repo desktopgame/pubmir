@@ -29,7 +29,11 @@ func EnvPath(repoRoot string) string {
 // starting with # are ignored. It is not an error for the file to be
 // missing (returns an empty map) so a freshly-initialized repo still works.
 func LoadEnv(repoRoot string) (map[string]string, error) {
-	path := EnvPath(repoRoot)
+	return LoadEnvFile(EnvPath(repoRoot))
+}
+
+// LoadEnvFile reads a KEY=VALUE file without requiring an initialized repo.
+func LoadEnvFile(path string) (map[string]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -50,7 +54,7 @@ func LoadEnv(repoRoot string) (map[string]string, error) {
 		}
 		rawKey, value, ok := strings.Cut(line, "=")
 		if !ok {
-			return nil, fmt.Errorf("%s:%d: expected KEY=VALUE, got %q", path, lineNo, line)
+			return nil, fmt.Errorf("%s:%d: expected KEY=VALUE", path, lineNo)
 		}
 		key := strings.TrimSpace(rawKey)
 		if !keyPattern.MatchString(key) {

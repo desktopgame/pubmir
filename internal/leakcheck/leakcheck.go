@@ -252,7 +252,9 @@ func checkStubs(mirror, private *pairing.Side, reachable map[string]bool) ([]Fin
 			continue
 		}
 
-		if reachable[e.Sha] {
+		// restore initially leaves the public placeholder in private too.
+		// Its known, fixed content is not a private blob leaking to mirror.
+		if reachable[e.Sha] && e.Sha != mirrorEntry.Sha {
 			findings = append(findings, Finding{
 				Category: "stub-content-leak",
 				Detail: fmt.Sprintf("%s: private's real content for this stubbed file is still reachable in mirror history; "+

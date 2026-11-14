@@ -27,6 +27,7 @@ func buildMirrorToPrivate(
 	privateStubs []gitrepo.TreeEntry,
 	reserved map[string]bool,
 	excludePatterns []string,
+	progress ...func(int, int),
 ) ([]BuiltCommit, error) {
 	parentOf := map[string]string{} // mirror sha -> private sha
 	for _, m := range bs.Mapping {
@@ -34,7 +35,7 @@ func buildMirrorToPrivate(
 	}
 
 	var built []BuiltCommit
-	for _, sha := range shas {
+	for i, sha := range shas {
 		commit, err := mirror.CommitInfo(sha)
 		if err != nil {
 			return nil, err
@@ -116,6 +117,9 @@ func buildMirrorToPrivate(
 
 		parentOf[sha] = privateSha
 		built = append(built, BuiltCommit{SourceSha: sha, TargetSha: privateSha, Message: firstLine(restoredMessage)})
+		for _, notify := range progress {
+			notify(i+1, len(shas))
+		}
 	}
 	return built, nil
 }

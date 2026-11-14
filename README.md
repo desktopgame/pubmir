@@ -112,6 +112,38 @@ mirror を GitHub 等へ push する前には `pubmir check` で漏洩がない�
 pubmir check
 ```
 
+## 既存ミラーから新環境の private を作る
+
+VPS の移行などで、GitHub にある匿名化済みの構成を新しい実値で使い始める場合は `restore` を使います。既存の private やペアを残したまま、別ディレクトリに新しいペアを用意できます。
+
+```bash
+git clone <GitHubのミラーURL> VPS-mirror-new
+
+# ミラーの外に新環境の秘密値ファイルを用意する
+mkdir -p ~/private-config
+chmod 700 ~/private-config
+# ~/private-config/new-vps.env をエディタで作成（KEY=VALUE）
+chmod 600 ~/private-config/new-vps.env
+
+cd VPS-mirror-new
+pubmir restore --to ../VPS-new --secrets ~/private-config/new-vps.env
+
+cd ../VPS-new
+# stub の証明書・鍵や、元の exclude 対象ファイルは別途用意する
+# 編集・コミット後は通常の sync が使える
+pubmir status
+pubmir check
+```
+
+秘密値ファイルの例:
+
+```dotenv
+VPS_PUBLIC_IP=198.51.100.27
+VPS_USER=new-user
+```
+
+これは構成ドキュメント・設定を実値に展開する操作です。VPS への接続やサービスのデプロイは実行しません。
+
 ## コマンド
 
 `pubmir sync` の意味は常に **「今いるリポジトリの未同期の変更を、対応するリポジトリへ安全に搬送する」** です。方向は `.pubmir.yml` の `role` から自動判定されるため、export / import や push / pull を覚え分ける必要はありません。
@@ -128,6 +160,32 @@ pubmir check
 * 上記のうち Git 管理対象のファイルを 1 つのコミットにまとめる
 
 既に初期化済みの場合は、既存ファイルを上書きせずに停止します。
+
+### `pubmir restore --to <new-private-path> --secrets <env-file> [--config <private-yml>]`
+
+まだローカルの `.pubmir/` がない **mirror のクローン側**から実行します。`init` を先に実行する必要はありません。既にペア設定がある場合は、別ディレクトリへ clone してください。
+
+* 現在のブランチの全履歴を、新しい秘密値で展開した private リポジトリとして作成します。旧環境の秘密値や private は不要です
+* ファイルの内容とコミットメッセージの本文を展開します。author / committer と日時は引き継ぎますが、private のコミット SHA は変わります
+* mirror のコミット・作業ツリー・remote 設定を保持します。実値を含むオブジェクトは private にだけ書き込み、private に remote は設定しません
+* private に `.pubmir.env` と秘密値履歴を作り、双方にペア設定とコミット対応を記録します。完了後は通常の `sync` が使えます
+* `--to` は存在しないパスを指定します。親ディレクトリは事前に作成してください。mirror 内への復元や既存ディレクトリの上書きは拒否します
+* `--secrets` は mirror の外に置いた `KEY=VALUE` ファイルです。過去の履歴にしか登場しないトークンにも、新しい値が必要です。値の不足・空値・複数キーへの同一値の指定はエラーになります
+* 復元前に履歴を検査し、private を一時ディレクトリ内で作り終えてから配置します。エラー時には復元先を公開せず、mirror のローカル設定も残しません
+
+**元の private の除外ルールや example_tokens は、ミラーからは復元できません。** 元の設定が残っている場合は次のように指定できます。
+
+```bash
+pubmir restore --to ../VPS-new \
+  --secrets ~/private-config/new-vps.env \
+  --config ../VPS-old/.pubmir.yml
+```
+
+`--config` を省略すると、固定の placeholder を検出したパスを `stub` に登録します。その他の `exclude` / `example_tokens` は空から始めます（`init` の既定の除外ルールも自動では追加しません）。ドキュメント用トークンがある場合は `example_tokens` を含む private 設定を指定してください。
+
+**stub の中身や、exclude でミラーに出さなかったファイルは復元できません。** stub は private にも placeholder として残し、検出したパスを表示します。新環境用の証明書・鍵などへ置き換えてコミットしてください。公開済み placeholder そのものは漏洩として扱いません。
+
+対象は現在のブランチのみです。マージコミット・symlink・submodule を含む履歴の restore には対応していません。
 
 ### `pubmir sync [--yes]`
 

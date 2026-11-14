@@ -343,15 +343,26 @@ func scanWorkingTree(root string, mapper *tokenize.Mapper, currentKeys map[strin
 
 func scanHistory(repo *gitrepo.Repo, mapper *tokenize.Mapper, currentKeys map[string]string, explainedKeys map[string]bool, blobs []string, reserved map[string]bool, progress ...io.Writer) ([]Finding, error) {
 	out := progressWriter(progress)
-	fmt.Fprintln(out, "Check: checking history paths...")
 	checkedTrees := 0
 	var findings []Finding
+	fmt.Fprintln(out, "Check: checking history messages...")
+	err := repo.VisitHistoryMessages(func(sha string, message []byte) error {
+		for _, f := range scanBytes(message, mapper, currentKeys, explainedKeys, reserved) {
+			findings = append(findings, Finding{Category: f.Category, Detail: fmt.Sprintf("commit %s message: %s", sha, f.Detail)})
+		}
+		findings = append(findings, scanGenericPatterns(message, "commit "+sha+" message")...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	fmt.Fprintln(out, "Check: checking history paths...")
 
 	// Collect paths and bookkeeping IDs together, newest trees first. This
 	// replaces a separate Git lookup per bookkeeping path per commit.
 	bookkeepingBlobs := map[string]bool{}
 	seenPaths := map[string]bool{}
-	err := repo.VisitHistoryTrees(func(entries []gitrepo.TreeEntry) error {
+	err = repo.VisitHistoryTrees(func(entries []gitrepo.TreeEntry) error {
 		for _, e := range entries {
 			if slices.Contains(config.BookkeepingPaths, e.Path) {
 				bookkeepingBlobs[e.Sha] = true

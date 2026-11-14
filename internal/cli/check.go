@@ -41,7 +41,7 @@ func RunCheck(args []string) error {
 	historical := false
 	for _, f := range findings {
 		fmt.Printf("  - %s\n", f)
-		if strings.HasPrefix(f.Detail, "blob ") {
+		if strings.HasPrefix(f.Detail, "blob ") || strings.HasPrefix(f.Detail, "commit ") {
 			historical = true
 		}
 	}

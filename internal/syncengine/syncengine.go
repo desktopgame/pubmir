@@ -358,13 +358,12 @@ type gatePolicy struct {
 func gateBuiltCommits(mirror *gitrepo.Repo, built []BuiltCommit, p gatePolicy, progress ...func(int, int)) error {
 	checked := map[string]bool{}
 	for i, bc := range built {
-		for _, f := range leakcheck.ScanBytesForLeaks([]byte(bc.Message), p.mapper, p.currentSecrets, p.reservedTokens) {
-			return fmt.Errorf("leak check failed on commit %s message: %s; mirror was not modified", bc.SourceSha, f.Detail)
-		}
-
 		commit, err := mirror.CommitInfo(bc.TargetSha)
 		if err != nil {
 			return err
+		}
+		for _, f := range leakcheck.ScanBytesForLeaks([]byte(commit.Message), p.mapper, p.currentSecrets, p.reservedTokens) {
+			return fmt.Errorf("leak check failed on commit %s message: %s; mirror was not modified", bc.SourceSha, f.Detail)
 		}
 		entries, err := mirror.LsTreeRecursive(commit.Tree)
 		if err != nil {
@@ -436,13 +435,29 @@ func runMirrorToPrivate(privateSide, mirrorSide *pairing.Side, branch string, pr
 
 	// private's own real blobs for stubbed paths, so rebuilding private's
 	// tree from mirror's does not replace them with the placeholder.
-	privateStubs, err := stubEntries(privateSide.Repo, pre.privateHead, pre.privateHasHead, privateSide.Config.Stub)
+	privateStubs, err := matchingEntries(privateSide.Repo, pre.privateHead, pre.privateHasHead, privateSide.Config.Stub)
 	if err != nil {
 		return nil, err
 	}
+	excludePatterns := append(append([]string{}, config.ForcedExcludes...), privateSide.Config.Exclude...)
+	// Excluded files have no mirror representation. Preserve private's own
+	// entries, including modes and object IDs, rather than treating their
+	// absence from mirror as deletion. Exclude also takes priority over stub.
+	excluded, err := matchingEntries(privateSide.Repo, pre.privateHead, pre.privateHasHead, excludePatterns)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range excluded {
+		if !slices.Contains(config.BookkeepingPaths, e.Path) {
+			carryForward = append(carryForward, e)
+		}
+	}
+	privateStubs = slices.DeleteFunc(privateStubs, func(e gitrepo.TreeEntry) bool {
+		return tokenize.IsExcluded(e.Path, excludePatterns)
+	})
 
 	built, err := buildMirrorToPrivate(mirrorSide.Repo, privateSide.Repo, pre.mirrorUnsyncedShas, current, pre.branchState,
-		carryForward, privateSide.Config.Stub, privateStubs, tokenize.ReservedSet(privateSide.Config.ExampleTokens))
+		carryForward, privateSide.Config.Stub, privateStubs, tokenize.ReservedSet(privateSide.Config.ExampleTokens), excludePatterns)
 	if err != nil {
 		return nil, err
 	}
@@ -473,11 +488,10 @@ func runMirrorToPrivate(privateSide, mirrorSide *pairing.Side, branch string, pr
 	return &Report{Direction: "mirror->private", Branch: branch, Applied: built}, nil
 }
 
-// stubEntries returns repo's own tree entries whose paths match the stub
-// patterns. On the private side these are the real files a stub stands in
-// for, which must survive a mirror->private sync untouched.
-func stubEntries(repo *gitrepo.Repo, head string, hasHead bool, stubPatterns []string) ([]gitrepo.TreeEntry, error) {
-	if !hasHead || len(stubPatterns) == 0 {
+// matchingEntries returns repo's own tree entries matching patterns, so
+// private's excluded and stubbed content can survive mirror->private sync.
+func matchingEntries(repo *gitrepo.Repo, head string, hasHead bool, patterns []string) ([]gitrepo.TreeEntry, error) {
+	if !hasHead || len(patterns) == 0 {
 		return nil, nil
 	}
 	entries, err := repo.LsTreeRecursive(head + "^{tree}")
@@ -486,7 +500,7 @@ func stubEntries(repo *gitrepo.Repo, head string, hasHead bool, stubPatterns []s
 	}
 	var matched []gitrepo.TreeEntry
 	for _, e := range entries {
-		if tokenize.MatchesAny(e.Path, stubPatterns) {
+		if tokenize.MatchesAny(e.Path, patterns) {
 			matched = append(matched, e)
 		}
 	}

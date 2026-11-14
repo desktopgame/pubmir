@@ -26,6 +26,7 @@ func buildMirrorToPrivate(
 	stubPatterns []string,
 	privateStubs []gitrepo.TreeEntry,
 	reserved map[string]bool,
+	excludePatterns []string,
 ) ([]BuiltCommit, error) {
 	parentOf := map[string]string{} // mirror sha -> private sha
 	for _, m := range bs.Mapping {
@@ -50,6 +51,9 @@ func buildMirrorToPrivate(
 
 		var privateEntries []gitrepo.TreeEntry
 		for _, e := range entries {
+			if tokenize.IsExcluded(e.Path, excludePatterns) {
+				continue
+			}
 			// A stub is a placeholder artifact, not an editable view of the
 			// private file: its content must never travel back. private's
 			// own real blob is re-inserted via privateStubs below.

@@ -10,6 +10,27 @@ import (
 	"strings"
 )
 
+// VisitHistoryMessages visits complete commit messages reachable from any ref.
+func (r *Repo) VisitHistoryMessages(visit func(string, []byte) error) error {
+	out, err := r.run(nil, "log", "--all", "--format=%H%x00%B", "-z", "--no-show-signature", "--no-notes")
+	if err != nil {
+		return err
+	}
+	if out == "" {
+		return nil
+	}
+	fields := strings.Split(strings.TrimSuffix(out, "\x00"), "\x00")
+	if len(fields)%2 != 0 {
+		return fmt.Errorf("unexpected git log message output")
+	}
+	for i := 0; i < len(fields); i += 2 {
+		if err := visit(fields[i], []byte(fields[i+1])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // VisitBlobs reads blobs with one Git process, retaining only one blob's
 // contents at a time. Missing objects, wrong types and truncated output fail.
 func (r *Repo) VisitBlobs(shas []string, visit func(string, []byte) error) error {
